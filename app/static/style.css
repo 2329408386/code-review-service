@@ -184,11 +184,15 @@ input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px 
 .group-head h2 { font-size: 15px; }
 .group-head span { color: var(--text-3); font-size: 13px; }
 .group.delayed .group-head h2 { color: var(--warning); }
-/* 检视记录小卡片：宽屏一排约 6 张，随宽度自动换行 */
-.review-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+/* 检视记录小卡片：每排最多 6 张（每张至少 210px），屏幕变窄时自动减少 */
+.review-grid {
+  --card-gap: 14px;
+  display: grid; gap: var(--card-gap);
+  grid-template-columns: repeat(auto-fill, minmax(max(210px, (100% - 5 * var(--card-gap)) / 6), 1fr));
+}
 .review-card {
-  position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 0;
-  padding: 9px 12px; border: 1px solid var(--border); border-top: 3px solid var(--text-3); border-radius: var(--radius);
+  position: relative; display: flex; flex-direction: column; gap: 5px; min-width: 0;
+  padding: 12px 14px; border: 1px solid var(--border); border-top: 3px solid var(--text-3); border-radius: var(--radius);
   background: var(--surface); box-shadow: var(--shadow); cursor: pointer;
   transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s;
 }
@@ -201,17 +205,17 @@ input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px 
 .review-card.card-failed { border-top-color: var(--danger); }
 .review-card.card-ignored { border-top-color: var(--border); }
 .card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.card-top .badge { padding: 1px 8px; font-size: 11px; }
-.card-title { margin-top: 2px; font-weight: 600; font-size: 13px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-repo, .card-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; font-size: 12px; line-height: 1.5; }
+.card-top .badge { padding: 2px 9px; font-size: 12px; }
+.card-title { margin-top: 2px; font-weight: 600; font-size: 15px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-repo, .card-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; font-size: 13px; line-height: 1.5; }
 .card-repo .repo { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-repo .mono { color: var(--text-3); flex: none; font-size: 11px; }
+.card-repo .mono { color: var(--text-3); flex: none; font-size: 12px; }
 .card-meta { color: var(--text-3); font-variant-numeric: tabular-nums; }
 .card-meta .author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-meta span:last-child { flex: none; }
 .finding-pill {
   flex: none; padding: 1px 8px; border-radius: 999px;
-  background: var(--neutral-soft); color: var(--text-2); font-size: 11px; font-variant-numeric: tabular-nums;
+  background: var(--neutral-soft); color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums;
 }
 .finding-pill.has { background: var(--warning-soft); color: var(--warning); font-weight: 600; }
 /* 管理员操作：悬停或聚焦卡片时浮现在右下角 */
@@ -392,7 +396,7 @@ input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px 
   .kpis-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .toolbar-right { margin-left: 0; }
   .field.search input { width: 100%; }
-  .review-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .review-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
   .route-grid, .info-grid { grid-template-columns: 1fr; }
   .bar-row { grid-template-columns: 100px 1fr 48px; }
 }

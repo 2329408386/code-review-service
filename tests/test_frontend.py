@@ -71,3 +71,13 @@ def test_local_commit_display():
     # 本地提交显示短提交号与“仅平台展示”，不显示 MR 编号
     assert 'task.origin === "local"' in JS
     assert 'local: "仅平台展示"' in JS
+
+
+def test_shard_numbering_matches_backend():
+    # 后端分片编号从 1 开始（codex.discovery.1），前端不能再 +1；单分片不显示编号
+    assert "Number(match[2]) + 1" not in JS
+    assert "total > 1 ?" in JS
+
+
+def test_reply_ratio_one_decimal():
+    assert ".toFixed(1)" in JS

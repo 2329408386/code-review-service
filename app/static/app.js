@@ -36,7 +36,7 @@
     { key: "other", label: "其他", color: "var(--text-3)" },
   ];
   const SHARD_PATTERN = /^codex\.(discovery|verify|direct)\.(\d+)\.reasoning$/;
-  const SHARD_LABELS = { discovery: "发现", verify: "复核", direct: "直接检视" };
+  const SHARD_LABELS = { discovery: "代码检视", verify: "证据复核", direct: "超大新增文件直检" };
 
   /** 转义 HTML，所有动态内容插入前都必须经过它。 */
   function escapeHtml(value) {
@@ -458,7 +458,7 @@
         ? REPLY_SEGMENTS.map((seg) => `<span style="width:${(stats[seg.key] / total) * 100}%;background:${seg.color}" title="${seg.label} ${stats[seg.key]}"></span>`).join("")
         : "";
       $("reply-legend").innerHTML = REPLY_SEGMENTS.map((seg) => {
-        const ratio = total ? Math.round((stats[seg.key] / total) * 100) : 0;
+        const ratio = (total ? (stats[seg.key] / total) * 100 : 0).toFixed(1);  // 保留 1 位小数
         return `<span><i style="background:${seg.color}"></i>${seg.label}<b>${formatNumber(stats[seg.key])}</b> · ${ratio}%</span>`;
       }).join("");
     } catch {
@@ -620,9 +620,12 @@
     }
   }
 
+  /** 推理事件所属分片的标题。后端分片编号从 1 开始；只有 1 个分片时不显示编号。 */
   function shardOf(event) {
     const match = SHARD_PATTERN.exec(event.stage);
-    return match ? `${SHARD_LABELS[match[1]]} · 分片 ${Number(match[2]) + 1}` : "检视流程";
+    if (!match) return "检视流程";
+    const total = drawer.task?.review_chunk_count || 0;
+    return total > 1 ? `${SHARD_LABELS[match[1]]} · 分片 ${match[2]}/${total}` : SHARD_LABELS[match[1]];
   }
 
   function renderTimeline() {
