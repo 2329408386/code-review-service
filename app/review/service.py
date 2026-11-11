@@ -19,7 +19,7 @@ from ..codehub.evaluation import build_content, rate_mr_quality
 from ..codehub.publisher import Publisher
 from ..config import Settings
 from ..llm import chat
-from ..llm.codex import DEFAULT_MODEL_LABEL, CodexClient, CodexError, CodexResult
+from ..llm.codex import DEFAULT_MODEL_LABEL, CodexClient, CodexError, CodexResult, ModelUnavailable
 from ..llm.output import Progress
 from ..llm.registry import ModelRegistry, ModelRoute
 from ..models import FindingCandidate, ReviewTask
@@ -165,7 +165,6 @@ class ReviewService:
 
         # ---------- 检视
         self._build_codegraph(task.id, worktree)
-        self.database.record_model_usage(task.id, route.name if route else DEFAULT_MODEL_LABEL)
         direct = [chunk for chunk in chunks if chunk.direct_llm]
         workers = min(len(chunks), CHUNK_WORKERS)
         self._event(
@@ -248,18 +247,46 @@ class ReviewService:
     def _run_codex(
         self, task: ReviewTask, worktree: Path, prompt: str, stage: str, label: str, route: ModelRoute | None
     ) -> CodexResult:
+        """按路由优先级调用 Codex：当前路由调用失败时自动切换到下一条可用路由。
+
+        路由顺序由 registry.candidates 决定（异常路由冷却期内排到最后，冷却结束后自动回到首位）。
+        """
         def on_progress(progress: Progress) -> None:
             self._event(task.id, f"{stage}.reasoning", "completed", progress.message, progress.detail)
 
-        return self.codex.review(
-            worktree=worktree,
-            prompt=prompt,
-            task_id=task.id,
-            label=label,
-            route=route,
-            log_identity=(task.repository_name, task.source_branch),
-            on_progress=on_progress,
-        )
+        candidates: list[ModelRoute | None] = list(self.registry.candidates(task.repository_name)) or [None]
+        if route is not None and route not in candidates:  # 配置刚被修改时，仍保留任务开始时的路由
+            candidates.insert(0, route)
+        for position, candidate in enumerate(candidates):
+            has_next = position + 1 < len(candidates)
+            try:
+                result = self.codex.review(
+                    worktree=worktree,
+                    prompt=prompt,
+                    task_id=task.id,
+                    label=label,
+                    route=candidate,
+                    log_identity=(task.repository_name, task.source_branch),
+                    on_progress=on_progress,
+                    failover=has_next,
+                )
+            except ModelUnavailable as exc:
+                marked = self.registry.report_failure(candidate, str(exc))
+                if not has_next:
+                    raise
+                nxt = candidates[position + 1]
+                self._event(
+                    task.id, stage, "warning",
+                    f"模型 {candidate.name if candidate else DEFAULT_MODEL_LABEL} 调用失败，"
+                    f"已切换到 {nxt.name if nxt else DEFAULT_MODEL_LABEL}"
+                    + ("（该模型已判定异常，冷却期内其它任务也会绕开它）" if marked else ""),
+                    str(exc)[:EVENT_DETAIL_MAX_CHARS],
+                )
+                continue
+            self.registry.report_success(candidate)
+            self.database.record_model_usage(task.id, result.model)
+            return result
+        raise AssertionError("unreachable")
 
     def _review_chunk(
         self, task: ReviewTask, worktree: Path, chunk: ReviewChunk, index: int, total: int, route: ModelRoute | None
@@ -315,17 +342,26 @@ class ReviewService:
         self._event(task_id, "evaluation", "pending", f"MR 整体评价已进入发送队列（{len(findings)} 条意见）")
 
     def _evaluation_summary(self, task: ReviewTask, findings, route: ModelRoute | None) -> str | None:
-        """调用大模型生成两点评价；网关未配置或调用失败时返回 None（使用模板评价）。"""
-        gateway = self.registry.gateway_for(route)
-        model = route.name if route else self.settings.openai_model
-        if not gateway.configured or not model:
-            return None
-        try:
-            result = chat.complete(gateway, model, build_evaluation_prompt(task, findings))
-        except chat.ChatError as exc:
-            LOGGER.warning("[task=%s] evaluation summary failed, using template: %s", task.id, exc)
-            return None
-        self.database.add_token_usage(
-            task.id, input_tokens=result.input_tokens, output_tokens=result.output_tokens
-        )
-        return result.text or None
+        """调用大模型生成两点评价；按路由优先级逐个尝试，全部失败或未配置网关时返回 None（使用模板评价）。
+
+        评价走 /chat/completions，与 Codex 检视的可用性不完全一致，因此不影响路由健康状态。
+        """
+        candidates: list[ModelRoute | None] = list(self.registry.candidates(task.repository_name))
+        if not candidates:
+            candidates = [route]  # 没有任何路由：route 为 None，使用 .env 默认网关与 OPENAI_MODEL
+        prompt = build_evaluation_prompt(task, findings)
+        for candidate in candidates:
+            gateway = self.registry.gateway_for(candidate)
+            model = candidate.name if candidate else self.settings.openai_model
+            if not gateway.configured or not model:
+                continue
+            try:
+                result = chat.complete(gateway, model, prompt)
+            except chat.ChatError as exc:
+                LOGGER.warning("[task=%s] evaluation summary failed with %s: %s", task.id, model, exc)
+                continue
+            self.database.add_token_usage(
+                task.id, input_tokens=result.input_tokens, output_tokens=result.output_tokens
+            )
+            return result.text or None
+        return None

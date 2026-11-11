@@ -773,7 +773,7 @@
 
   // ==================== 6. 模型路由 ====================
 
-  const models = { routes: [], defaultKey: null, efforts: [], envGateway: false, loaded: false, dirty: false };
+  const models = { routes: [], defaultKey: null, efforts: [], envGateway: false, health: {}, loaded: false, dirty: false };
   let routeSeq = 0;
 
   /** 路由在前端的唯一键：已保存的用 id，新增的用临时键。 */
@@ -789,11 +789,24 @@
       models.defaultKey = data.default_model;
       models.efforts = data.reasoning_efforts;
       models.envGateway = data.env_gateway_configured;
+      models.health = data.health || {};
       models.loaded = true;
       renderModels();
     } catch (error) {
       $("model-status").textContent = `加载失败：${error.message}`;
     }
+  }
+
+  /** 路由健康状态：异常（冷却中，其它任务自动改用其它路由）或最近有失败。 */
+  function routeHealthBadge(route) {
+    const health = route.id && models.health[route.id];
+    if (!health) return "";
+    const tip = escapeHtml(health.last_error || "");
+    if (!health.available) {
+      const minutes = Math.max(1, Math.ceil(health.retry_in_seconds / 60));
+      return ` <span class="route-health is-down" title="${tip}">异常 · 已切换到其它模型，约 ${minutes} 分钟后重试</span>`;
+    }
+    return ` <span class="route-health is-warn" title="${tip}">最近失败 ${health.failures} 次</span>`;
   }
 
   function renderModels() {
@@ -818,7 +831,7 @@
       const efforts = models.efforts.map((effort) => `<option value="${effort}"${route.reasoning_effort === effort ? " selected" : ""}>${effort}</option>`).join("");
       return `<div class="route${isDefault ? " is-default" : ""}" data-key="${escapeHtml(key)}">
         <div class="route-head">
-          <span class="route-name">${escapeHtml(route.name)}</span>
+          <span class="route-name">${escapeHtml(route.name)}${routeHealthBadge(route)}</span>
           <label class="default-toggle"><input type="radio" name="default-route" data-field="default"${isDefault ? " checked" : ""}${disabled} />兜底路由</label>
           <label class="inline">并发<input type="number" min="1" max="100" value="${route.concurrency}" data-field="concurrency"${disabled} /></label>
           ${editable ? `<button class="icon-btn danger" type="button" data-route-action="remove" title="删除路由" aria-label="删除路由">${ICONS.trash}</button>` : ""}

@@ -86,12 +86,19 @@ def feature_repo(tmp_path: Path) -> tuple[Path, str, str]:
 
 
 def fake_codex(
-    directory: Path, outputs: list[dict | str], *, monkeypatch=None, exit_code: int = 0, usage: tuple = (100, 20, 5)
+    directory: Path,
+    outputs: list[dict | str],
+    *,
+    monkeypatch=None,
+    exit_code: int = 0,
+    usage: tuple = (100, 20, 5),
+    fail_models: tuple[str, ...] = (),
 ) -> Path:
     """生成一个伪 codex 可执行文件：按调用次数依次输出 outputs 中的结论，并打印 JSONL 事件。
 
     第 N 次调用使用 outputs[min(N, len-1)]；调用参数追加写入 calls.jsonl 便于断言。
     传入 monkeypatch 时把 directory 放到 PATH 最前面，使 CodexClient 找到这个伪命令。
+    fail_models 中的模型（--model 参数）模拟网关报错：不输出结论，以退出码 1 结束。
     """
     directory.mkdir(parents=True, exist_ok=True)
     payloads = [item if isinstance(item, str) else json.dumps(item, ensure_ascii=False) for item in outputs]
@@ -111,6 +118,10 @@ with open(os.path.join(directory, "calls.jsonl"), "a") as fh:
     fh.write(json.dumps({{"argv": sys.argv[1:], "prompt": prompt, "key": os.environ.get("CODE_REVIEW_LLM_API_KEY")}}) + "\\n")
 args = sys.argv[1:]
 output = args[args.index("--output-last-message") + 1]
+model = args[args.index("--model") + 1] if "--model" in args else ""
+if model in {list(fail_models)!r}:
+    print(json.dumps({{"type": "turn.failed", "error": {{"message": "model " + model + " is not supported"}}}}), flush=True)
+    sys.exit(1)
 print(json.dumps({{"type": "item.completed", "item": {{"type": "reasoning", "text": "正在阅读 app.py"}}}}), flush=True)
 print(json.dumps({{"type": "turn.completed", "usage": {{"input_tokens": {usage[0]}, "output_tokens": {usage[1]}, "cached_input_tokens": {usage[2]}}}}}), flush=True)
 open(output, "w").write(payloads[min(count, len(payloads) - 1)])

@@ -1,6 +1,8 @@
 """Codex CLI 调用：在任务 clone 中执行 `codex exec`，流式解析进度并提取结构化结论。
 
-并发由两级信号量控制：全局 MAX_CODEX_CONCURRENCY + 每条模型路由各自的并发上限。
+并发由每条模型路由各自的并发上限控制。
+进程级失败（启动失败、非 0 退出、超时）抛出 ModelUnavailable，由调用方决定是否切换到其它路由；
+输出格式不合法则在同一路由上追加格式提示重试。
 """
 from __future__ import annotations
 
@@ -47,6 +49,10 @@ class CodexError(RuntimeError):
     def __init__(self, message: str, *, raw_output: str = ""):
         super().__init__(message)
         self.raw_output = raw_output
+
+
+class ModelUnavailable(CodexError):
+    """模型调用本身失败（网关报错、模型不可用、进程异常退出或超时），可切换到其它路由重试。"""
 
 
 @dataclass(frozen=True)
@@ -120,16 +126,21 @@ class CodexClient:
         route: ModelRoute | None,
         log_identity: tuple[str, str],
         on_progress: Callable[[Progress], None] | None = None,
+        failover: bool = False,
     ) -> CodexResult:
         """在模型路由的并发槽位内执行一次检视（含格式错误重试）。
 
         并发只由模型路由的“并发度”控制；没有路由时使用固定的兜底上限。
+        failover=True 表示调用方还有其它路由可切换：进程级失败立即抛出 ModelUnavailable，
+        不在当前路由上重试；否则进程级失败也在当前路由重试，用尽后抛出 ModelUnavailable。
         """
         with self.registry.slot(route) or self._fallback_slot:
             with self._active_lock:
                 self._active += 1
             try:
-                return self._run_with_retries(worktree, prompt, task_id, label, route, log_identity, on_progress)
+                return self._run_with_retries(
+                    worktree, prompt, task_id, label, route, log_identity, on_progress, failover
+                )
             finally:
                 with self._active_lock:
                     self._active -= 1
@@ -169,6 +180,7 @@ class CodexClient:
         route: ModelRoute | None,
         log_identity: tuple[str, str],
         on_progress: Callable[[Progress], None] | None,
+        failover: bool,
     ) -> CodexResult:
         if not self.available:
             raise CodexError(f"Codex CLI not found: {COMMAND}")
@@ -183,9 +195,11 @@ class CodexClient:
                 raw, messages, usage, duration = self._run_once(
                     worktree, attempt_prompt, route, log_prefix, task_id, on_progress
                 )
-            except CodexError as exc:
+            except ModelUnavailable as exc:
                 last_error = exc
                 LOGGER.warning("[task=%s] Codex %s attempt %s failed: %s", task_id, label, attempt, exc)
+                if failover:
+                    raise
                 continue
             totals = [totals[0] + duration, totals[1] + usage[0], totals[2] + usage[1], totals[3] + usage[2]]
             # 优先使用 --output-last-message 文件，其次倒序尝试事件流中的 agent_message
@@ -250,7 +264,7 @@ class CodexClient:
                 start_new_session=True,
             )
         except OSError as exc:
-            raise CodexError(f"unable to start Codex: {exc}") from exc
+            raise ModelUnavailable(f"unable to start Codex: {exc}") from exc
 
         def read_stdout() -> None:
             for line in process.stdout:
@@ -303,10 +317,10 @@ class CodexClient:
         if output_path.exists():
             raw = output_path.read_text(encoding="utf-8", errors="replace")[:MAX_OUTPUT_CHARS]
         if timed_out:
-            raise CodexError(f"Codex timed out after {TIMEOUT_SECONDS:.0f}s", raw_output=raw)
+            raise ModelUnavailable(f"Codex timed out after {TIMEOUT_SECONDS:.0f}s", raw_output=raw)
         if return_code != 0:
             detail = (stream_errors[-1] if stream_errors else "") or stderr_text.strip()[-2000:] or "no error output"
-            raise CodexError(f"Codex exited with code {return_code}: {detail}", raw_output=raw)
+            raise ModelUnavailable(f"Codex exited with code {return_code}: {detail}", raw_output=raw)
         return raw, list(messages), (usage[0], usage[1], usage[2]), duration
 
     @staticmethod

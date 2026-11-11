@@ -165,3 +165,49 @@ def test_evaluation_uses_chat_summary(env, database, settings, monkeypatch):
     stored = database.get_task(task.id)
     assert stored.evaluation_content == "检视思路：逐行核对\n总体评价：良好"
     assert stored.token_input >= 107  # Codex 100 + Chat 7
+
+
+def _two_routes(database, settings, monkeypatch):
+    """配置两条路由：primary 绑定 demo 仓库，backup 为兜底。"""
+    from app.llm import registry as registry_module
+
+    monkeypatch.setattr(registry_module, "FAILURE_THRESHOLD", 1)
+    ModelRegistry(database, settings).replace(
+        [{"name": "primary", "repositories": ["demo"]}, {"name": "backup"}], "backup"
+    )
+
+
+def test_failover_to_other_route_and_switch_back(env, database, settings, monkeypatch, tmp_path):
+    from app.llm import registry as registry_module
+
+    _two_routes(database, settings, monkeypatch)
+    env.task_overrides.update(repository_name="demo")
+    service, task, _ = env([{"summary": "", "findings": [FINDING]}], fail_models=("primary",))
+    service.process(task)
+    stored = database.get_task(task.id)
+    assert stored.status == "success", stored.error_message
+    assert stored.models_used == ["backup"]
+    warnings = [e.message for e in database.list_events([task.id]) if e.status == "warning"]
+    assert any("primary" in m and "backup" in m for m in warnings)
+    # primary 已判定异常：冷却期内新任务直接使用 backup
+    primary = service.registry.route_for("demo")
+    assert service.registry.candidates("demo")[0].name == "backup"
+    assert service.registry.configuration()["health"][primary.id]["available"] is False
+
+    # 冷却期结束且模型恢复：重新优先使用 primary，成功后恢复健康
+    monkeypatch.setattr(registry_module, "_clock", lambda: 10**12)
+    fake_codex(tmp_path / "bin", [{"summary": "", "findings": []}], monkeypatch=monkeypatch)
+    assert service.registry.candidates("demo")[0].name == "primary"
+    database._update_task(task.id, status="pending")
+    service.process(database.get_task(task.id))
+    assert "primary" in database.get_task(task.id).models_used
+    assert service.registry.configuration()["health"] == {}
+
+
+def test_all_routes_failing_marks_task_failed(env, database, settings, monkeypatch):
+    _two_routes(database, settings, monkeypatch)
+    env.task_overrides.update(repository_name="demo")
+    service, task, _ = env([{"summary": "", "findings": []}], fail_models=("primary", "backup"))
+    service.process(task)
+    stored = database.get_task(task.id)
+    assert stored.status == "failed" and "backup is not supported" in stored.error_message

@@ -177,3 +177,26 @@ def test_chat_errors(monkeypatch):
     )
     with pytest.raises(chat.ChatError, match="after 2 attempts"):
         chat.complete(gateway, "m", "p", timeout=1, max_attempts=2)
+
+
+def test_registry_candidates_cooldown_and_recovery(settings, database, monkeypatch):
+    from app.llm import registry as registry_module
+
+    now = [1000.0]
+    monkeypatch.setattr(registry_module, "_clock", lambda: now[0])
+    registry = ModelRegistry(database, settings)
+    registry.replace([{"name": "a", "repositories": ["demo"]}, {"name": "b"}, {"name": "c"}], "b")
+    names = lambda: [route.name for route in registry.candidates("demo")]  # noqa: E731
+    assert names() == ["a", "b", "c"]
+    a = registry.route_for("demo")
+    assert registry.report_failure(a, "boom") is False  # 未达到阈值，只切换当次调用
+    assert names() == ["a", "b", "c"]
+    registry.report_success(a)
+    registry.report_failure(a, "boom")
+    assert registry.report_failure(a, "boom") is True  # 连续失败达到阈值
+    assert names() == ["b", "c", "a"]
+    assert registry.configuration()["health"][a.id]["available"] is False
+    now[0] += registry_module.COOLDOWN_SECONDS + 1
+    assert names() == ["a", "b", "c"]  # 冷却结束后重新优先尝试
+    registry.report_success(a)
+    assert registry.configuration()["health"] == {}

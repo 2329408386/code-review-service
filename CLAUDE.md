@@ -4,7 +4,7 @@ FastAPI 服务：接收 CodeHub MR webhook → 隔离 clone → 调用 Codex CLI
 
 ## 常用命令
 - 启动（默认 8083 端口）：`./run.sh`（首次会自动创建 `.venv` 并安装依赖；`PORT=xxxx ./run.sh` 可改端口）
-- 测试：`.venv/bin/python -m pytest -q`（当前 76 个用例全部通过，改动后必须保持全绿）
+- 测试：`.venv/bin/python -m pytest -q`（当前 81 个用例全部通过，改动后必须保持全绿）
 - 单个测试：`.venv/bin/python -m pytest -q tests/test_xxx.py -k name`
 - 端到端冒烟（真实 Codex + 大模型网关）：`.venv/bin/python tests/e2e_smoke.py`（读取 `.env.example`，再用 `.env` 覆盖密钥）
 - 健康检查：`curl -s localhost:8083/health`
@@ -14,6 +14,8 @@ FastAPI 服务：接收 CodeHub MR webhook → 隔离 clone → 调用 Codex CLI
 - `app/config.py` 的 `Settings` 只保留部署方必须提供的参数（网关、CodeHub 凭据、管理员等），从环境变量 / `.env` 读取。
 - 超时、重试、并发、分片大小等调优参数是所在模块的大写常量（如 `review/service.py`、`llm/codex.py`、`codehub/publisher.py`），**不要再加回 Settings**；测试用 monkeypatch 修改。
 - Codex 并发只由模型路由的“并发度”控制；未配置管理员时控制台只读。
+- 模型故障切换（`llm/registry.py`）：Codex 进程级失败（`ModelUnavailable`）时当次调用自动换下一条路由；路由连续失败 `FAILURE_THRESHOLD` 次进入 `COOLDOWN_SECONDS` 冷却，期间所有任务绕开它，冷却后重新优先尝试，成功即切回。健康状态只在内存中。
+- `OPENAI_MODEL` 只用于首次启动生成兜底路由；之后以控制台的模型路由为准。
 - 大模型默认网关：`OPENAI_API_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL`。模型路由（控制台可改）可为每条路由单独配置网关，存于 SQLite `runtime_settings`。
 - 模板见 `.env.example`；`.env` 含密钥，已被 gitignore，**不要把密钥写进 `.env.example`**。
 - 运行时数据：`data/`（`reviews.db` SQLite、`repos/`、`worktrees/`、`codex-logs/`），日志：`log/`。均已 gitignore。
