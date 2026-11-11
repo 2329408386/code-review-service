@@ -50,9 +50,9 @@ def list_reviews(
     status: Annotated[list[StatusFilter] | None, Query()] = None,
     sort: Literal["asc", "desc"] = "desc",
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=120, ge=1),
+    page_size: int = Query(default=30, ge=1),
 ) -> dict:
-    page_size = page_size if page_size in PAGE_SIZES else 120
+    page_size = page_size if page_size in PAGE_SIZES else 30
     filters = {"repository": repository, "author": author, "statuses": status}
     tasks = runtime.database.list_tasks(**filters, sort=sort, limit=page_size, offset=(page - 1) * page_size)
     summary = runtime.database.task_summary(**filters)

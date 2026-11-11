@@ -139,7 +139,8 @@ def test_review_list_detail_events_export(client, runtime):
     listing = client.get("/api/reviews", params={"status": ["success"], "page_size": 30}).json()
     assert listing["total_count"] == 1 and listing["items"][0]["id"] == task.id
     assert listing["summary"]["finding_count"] == 2
-    assert client.get("/api/reviews", params={"page_size": 7}).json()["page_size"] == 120
+    assert client.get("/api/reviews", params={"page_size": 7}).json()["page_size"] == 30
+    assert client.get("/api/reviews").json()["page_size"] == 30
 
     detail = client.get(f"/api/reviews/{task.id}").json()
     assert len(detail["findings"]) == 2 and detail["last_event_id"] > 0

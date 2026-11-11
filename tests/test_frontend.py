@@ -46,7 +46,13 @@ def test_script_calls_backend_apis():
 
 def test_script_behaviour_markers():
     assert '"晚上8点后检视"' in JS  # 延后任务单独分组
-    assert "localStorage.setItem(STATUS_CHIPS_KEY" in JS  # 状态筛选持久化
+    # 代码仓、提交人、状态、排序、展示方式、每页数量都保存在浏览器本地，刷新后恢复
+    assert "localStorage.setItem(FILTERS_KEY" in JS and "restoreFilters();" in JS
+    for field in ("filter-repository", "filter-author", "filter-sort", "filter-view", "filter-page-size"):
+        assert f'"{field}"' in JS
+    # 记录以小卡片网格展示，默认每页 30 条
+    assert 'class="review-grid"' in JS and ".review-grid" in CSS
+    assert '<option value="30" selected>' in HTML
     assert "function escapeHtml" in JS
     assert re.search(r"\^codex\\\.\(discovery\|verify\|direct\)", JS)  # 推理过程按分片分组
     # 未登录时配置页只读

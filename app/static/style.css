@@ -184,28 +184,45 @@ input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px 
 .group-head h2 { font-size: 15px; }
 .group-head span { color: var(--text-3); font-size: 13px; }
 .group.delayed .group-head h2 { color: var(--warning); }
-.review-list { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
-.review-row {
-  display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; align-items: center; gap: 16px;
-  padding: 14px 18px; border-top: 1px solid var(--border); cursor: pointer; transition: background 0.12s;
+/* 检视记录小卡片：宽屏一排约 6 张，随宽度自动换行 */
+.review-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.review-card {
+  position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 0;
+  padding: 9px 12px; border: 1px solid var(--border); border-top: 3px solid var(--text-3); border-radius: var(--radius);
+  background: var(--surface); box-shadow: var(--shadow); cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s;
 }
-.review-row:first-child { border-top: 0; }
-.review-row:hover { background: var(--surface-2); }
-.review-row.selected { background: var(--primary-soft); }
-.review-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
-.row-main { min-width: 0; }
-.row-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.row-title .repo { font-weight: 600; white-space: nowrap; }
-.row-title .title { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; color: var(--text-3); font-size: 12px; }
-.row-meta .branch { font-family: var(--mono); color: var(--text-2); }
-.row-side { display: flex; align-items: center; gap: 14px; }
+.review-card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(20, 24, 40, 0.1); }
+.review-card.selected { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.review-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.review-card.card-pending { border-top-color: var(--warning); }
+.review-card.card-running { border-top-color: var(--info); }
+.review-card.card-success { border-top-color: var(--success); }
+.review-card.card-failed { border-top-color: var(--danger); }
+.review-card.card-ignored { border-top-color: var(--border); }
+.card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.card-top .badge { padding: 1px 8px; font-size: 11px; }
+.card-title { margin-top: 2px; font-weight: 600; font-size: 13px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-repo, .card-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; font-size: 12px; line-height: 1.5; }
+.card-repo .repo { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-repo .mono { color: var(--text-3); flex: none; font-size: 11px; }
+.card-meta { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.card-meta .author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-meta span:last-child { flex: none; }
 .finding-pill {
-  min-width: 64px; text-align: center; padding: 3px 10px; border-radius: 999px;
-  background: var(--neutral-soft); color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums;
+  flex: none; padding: 1px 8px; border-radius: 999px;
+  background: var(--neutral-soft); color: var(--text-2); font-size: 11px; font-variant-numeric: tabular-nums;
 }
 .finding-pill.has { background: var(--warning-soft); color: var(--warning); font-weight: 600; }
-.row-actions { display: flex; gap: 2px; }
+/* 管理员操作：悬停或聚焦卡片时浮现在右下角 */
+.card-actions {
+  position: absolute; right: 6px; bottom: 6px; display: flex; gap: 2px; padding: 2px;
+  border-radius: var(--radius-sm); background: var(--surface); box-shadow: var(--shadow);
+  opacity: 0; transition: opacity 0.12s;
+}
+.review-card:hover .card-actions, .review-card:focus-within .card-actions { opacity: 1; }
+.card-actions .icon-btn { width: 26px; height: 26px; }
+.card-actions svg { width: 15px; height: 15px; }
 
 .badge {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -375,7 +392,7 @@ input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px 
   .kpis-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .toolbar-right { margin-left: 0; }
   .field.search input { width: 100%; }
-  .review-row { grid-template-columns: 1fr; gap: 8px; }
+  .review-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .route-grid, .info-grid { grid-template-columns: 1fr; }
   .bar-row { grid-template-columns: 100px 1fr 48px; }
 }

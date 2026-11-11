@@ -16,7 +16,15 @@
 
   const $ = (id) => document.getElementById(id);
   const ADMIN_TOKEN_KEY = "admin_token";
-  const STATUS_CHIPS_KEY = "review_status_filters";
+  // 检视记录的筛选条件（代码仓、提交人、状态、排序、展示方式、每页数量）保存在浏览器本地，刷新后恢复
+  const FILTERS_KEY = "review_filters";
+  const FILTER_FIELDS = {
+    repository: "filter-repository",
+    author: "filter-author",
+    sort: "filter-sort",
+    view: "filter-view",
+    pageSize: "filter-page-size",
+  };
   const STATUS_LABELS = { pending: "排队中", running: "检视中", success: "已完成", failed: "失败", ignored: "已忽略" };
   const SEVERITY_LABELS = { major: "严重", minor: "一般", suggestion: "建议" };
   const COMMENT_LABELS = { pending: "待回写", sent: "已回写", failed: "回写失败", skipped: "已跳过", local: "仅平台展示" };
@@ -203,15 +211,33 @@
     summary: null,
     page: 1,
     totalPages: 1,
-    statuses: loadStatusChips(),
+    statuses: new Set(),
   };
 
-  function loadStatusChips() {
+  /** 从浏览器本地恢复筛选条件；下拉框只接受仍然存在的选项。 */
+  function restoreFilters() {
+    let saved = {};
     try {
-      const saved = JSON.parse(localStorage.getItem(STATUS_CHIPS_KEY) || "[]");
-      return new Set(saved.filter((status) => STATUS_LABELS[status]));
+      saved = JSON.parse(localStorage.getItem(FILTERS_KEY) || "{}") || {};
     } catch {
-      return new Set();
+      /* 本地存储不可用或内容损坏时使用默认值 */
+    }
+    for (const [key, id] of Object.entries(FILTER_FIELDS)) {
+      const value = saved[key];
+      if (typeof value !== "string") continue;
+      const node = $(id);
+      if (node.tagName !== "SELECT" || [...node.options].some((option) => option.value === value)) node.value = value;
+    }
+    if (Array.isArray(saved.statuses)) list.statuses = new Set(saved.statuses.filter((status) => STATUS_LABELS[status]));
+  }
+
+  function saveFilters() {
+    const data = { statuses: [...list.statuses] };
+    for (const [key, id] of Object.entries(FILTER_FIELDS)) data[key] = $(id).value;
+    try {
+      localStorage.setItem(FILTERS_KEY, JSON.stringify(data));
+    } catch {
+      /* 隐私模式等场景无法保存时忽略 */
     }
   }
 
@@ -230,10 +256,8 @@
     if (!status) list.statuses.clear();
     else if (list.statuses.has(status)) list.statuses.delete(status);
     else list.statuses.add(status);
-    localStorage.setItem(STATUS_CHIPS_KEY, JSON.stringify([...list.statuses]));
     renderStatusChips();
-    list.page = 1;
-    loadReviews();
+    searchNow();
   });
 
   function reviewQuery() {
@@ -294,34 +318,41 @@
     return groups;
   }
 
-  function recordRow(task) {
+  /** 卡片上的简短时间：月-日 时:分。 */
+  function shortTime(value) {
+    const text = formatTime(value);
+    return text === "—" ? text : text.slice(5, 16);
+  }
+
+  /** 一条检视记录的小卡片；完整标题、分支等信息放在悬停提示里。 */
+  function recordCard(task) {
     const selected = drawer.taskId === task.id ? " selected" : "";
-    const findingClass = task.finding_count ? " has" : "";
-    const scheduled = task.scheduled_start_at ? `<span>计划 ${formatTime(task.scheduled_start_at)}</span>` : "";
     const busy = task.status === "pending" || task.status === "running";
     const actions = auth.admin
-      ? `<div class="row-actions">
+      ? `<div class="card-actions">
           ${task.scheduled_start_at && task.status === "pending" ? `<button class="icon-btn" type="button" data-action="run-now" title="立即检视" aria-label="立即检视">${ICONS.play}</button>` : ""}
           <button class="icon-btn" type="button" data-action="rerun" title="重新检视" aria-label="重新检视"${busy ? " disabled" : ""}>${ICONS.rerun}</button>
           <button class="icon-btn danger" type="button" data-action="delete" title="删除记录" aria-label="删除记录"${task.status === "running" ? " disabled" : ""}>${ICONS.trash}</button>
         </div>`
       : "";
-    return `<div class="review-row${selected}" data-id="${escapeHtml(task.id)}" tabindex="0" role="button">
-      ${statusBadge(task.status)}
-      <div class="row-main">
-        <div class="row-title"><span class="repo">${escapeHtml(task.repository_name)}</span><span class="mono">${taskRef(task)}</span><span class="title">${escapeHtml(task.title || "（无标题）")}</span></div>
-        <div class="row-meta">
-          <span class="branch">${branchText(task)}</span>
-          <span>${escapeHtml(task.author || "未知提交人")}</span>
-          <span>${formatTime(task.created_at)}</span>
-          ${scheduled}
-          ${task.ignored_reason ? `<span>${escapeHtml(task.ignored_reason)}</span>` : ""}
-        </div>
+    const hint = [
+      task.title || "（无标题）",
+      `${task.repository_name} ${taskRef(task)}`,
+      task.origin === "local" ? `${task.source_branch} · 本地提交` : `${task.source_branch} → ${task.target_branch}`,
+      task.ignored_reason ? `已忽略：${task.ignored_reason}` : "",
+    ].filter(Boolean).join("\n");
+    const when = task.scheduled_start_at && task.status === "pending"
+      ? `计划 ${shortTime(task.scheduled_start_at)}`
+      : shortTime(task.created_at);
+    return `<div class="review-card card-${escapeHtml(task.status)}${selected}" data-id="${escapeHtml(task.id)}" tabindex="0" role="button" title="${escapeHtml(hint)}">
+      <div class="card-top">
+        ${statusBadge(task.status)}
+        <span class="finding-pill${task.finding_count ? " has" : ""}">${task.finding_count} 条</span>
       </div>
-      <div class="row-side">
-        <span class="finding-pill${findingClass}">${task.finding_count} 条意见</span>
-        ${actions}
-      </div>
+      <div class="card-title">${escapeHtml(task.title || "（无标题）")}</div>
+      <div class="card-repo"><span class="repo">${escapeHtml(task.repository_name)}</span><span class="mono">${taskRef(task)}</span></div>
+      <div class="card-meta"><span class="author">${escapeHtml(task.author || "未知")}</span><span>${when}</span></div>
+      ${actions}
     </div>`;
   }
 
@@ -330,7 +361,7 @@
     $("records").innerHTML = groups
       .map((group) => `<section class="group${group.delayed ? " delayed" : ""}">
         ${group.title ? `<div class="group-head"><h2>${escapeHtml(group.title)}</h2><span>${group.items.length} 条</span></div>` : ""}
-        <div class="review-list">${group.items.map(recordRow).join("")}</div>
+        <div class="review-grid">${group.items.map(recordCard).join("")}</div>
       </section>`)
       .join("");
     $("empty").hidden = list.items.length > 0;
@@ -363,7 +394,7 @@
   }
 
   $("records").addEventListener("click", (event) => {
-    const row = event.target.closest(".review-row");
+    const row = event.target.closest(".review-card");
     if (!row) return;
     const button = event.target.closest("[data-action]");
     if (button) {
@@ -374,7 +405,7 @@
     }
   });
   $("records").addEventListener("keydown", (event) => {
-    const row = event.target.closest(".review-row");
+    const row = event.target.closest(".review-card");
     if (row && event.target === row && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();
       openDrawer(row.dataset.id);
@@ -385,6 +416,7 @@
   let filterTimer = null;
   function searchNow() {
     clearTimeout(filterTimer);
+    saveFilters();
     list.page = 1;
     loadReviews();
   }
@@ -401,10 +433,8 @@
       }
     });
   }
-  for (const id of ["filter-sort", "filter-page-size"]) {
-    $(id).addEventListener("change", () => { list.page = 1; loadReviews(); });
-  }
-  $("filter-view").addEventListener("change", renderRecords);
+  for (const id of ["filter-sort", "filter-page-size"]) $(id).addEventListener("change", searchNow);
+  $("filter-view").addEventListener("change", () => { saveFilters(); renderRecords(); });
   $("refresh").addEventListener("click", () => { loadReviews(); loadReplyStats(); loadHealth(); });
   $("page-prev").addEventListener("click", () => { list.page -= 1; loadReviews(); });
   $("page-next").addEventListener("click", () => { list.page += 1; loadReviews(); });
@@ -1013,6 +1043,7 @@
 
   // ==================== 启动 ====================
 
+  restoreFilters();
   renderStatusChips();
   refreshAuth();
   loadFilterOptions();
