@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XKL 代码检视平台</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M10 11l-4 5 4 5M22 11l4 5-4 5M18 9l-4 14' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <!-- 侧边导航 -->
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16" /></svg>
+          </span>
+          <div>
+            <strong>XKL 代码检视</strong>
+            <small>让每次提交更可靠</small>
+          </div>
+        </div>
+        <nav class="nav" aria-label="主导航">
+          <a href="#reviews" data-page="reviews" class="active">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" /></svg>检视记录
+          </a>
+          <a href="#stats" data-page="stats">
+            <svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7" /></svg>数据统计
+          </a>
+          <a href="#models" data-page="models">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M5 19l3-3M16 8l3-3" /></svg>模型路由
+          </a>
+          <a href="#scope" data-page="scope">
+            <svg viewBox="0 0 24 24"><path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9" /></svg>检视范围
+          </a>
+        </nav>
+        <div class="sidebar-foot">
+          <div class="health" id="health"><span class="dot"></span><span id="health-text">检查服务状态…</span></div>
+        </div>
+      </aside>
+
+      <div class="main">
+        <header class="topbar">
+          <h1 id="page-title">检视记录</h1>
+          <div class="topbar-actions">
+            <span class="admin-badge" id="admin-badge" hidden></span>
+            <button class="btn" id="admin-button" type="button">管理员登录</button>
+          </div>
+        </header>
+
+        <!-- 检视记录 -->
+        <section class="page" id="page-reviews">
+          <div class="kpis">
+            <div class="kpi">
+              <span class="kpi-label">检视记录</span>
+              <strong class="kpi-value" id="kpi-reviews">—</strong>
+              <span class="kpi-sub" id="kpi-queue">队列 — · 执行中 —</span>
+            </div>
+            <div class="kpi kpi-wide">
+              <span class="kpi-label">检视意见</span>
+              <strong class="kpi-value" id="kpi-findings">—</strong>
+              <div class="reply-bar" id="reply-bar" aria-label="意见回复分布"></div>
+              <div class="reply-legend" id="reply-legend"></div>
+            </div>
+            <div class="kpi">
+              <span class="kpi-label">代码仓</span>
+              <strong class="kpi-value" id="kpi-repos">—</strong>
+              <span class="kpi-sub" id="kpi-refresh">最近刷新 —</span>
+            </div>
+          </div>
+
+          <div class="toolbar card">
+            <label class="field search">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
+              <input id="filter-repository" list="repository-list" type="search" placeholder="搜索代码仓" autocomplete="off" />
+            </label>
+            <label class="field search">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>
+              <input id="filter-author" list="author-list" type="search" placeholder="搜索提交人" autocomplete="off" />
+            </label>
+            <div class="chips" id="status-chips" role="group" aria-label="状态筛选"></div>
+            <div class="toolbar-right">
+              <select id="filter-sort" aria-label="排序">
+                <option value="desc">最新在前</option>
+                <option value="asc">最早在前</option>
+              </select>
+              <select id="filter-view" aria-label="展示方式">
+                <option value="time">按时间</option>
+                <option value="repository">按代码仓</option>
+              </select>
+              <select id="filter-page-size" aria-label="每页数量">
+                <option value="30">30 条/页</option>
+                <option value="60">60 条/页</option>
+                <option value="120" selected>120 条/页</option>
+                <option value="240">240 条/页</option>
+              </select>
+              <button class="btn" id="refresh" type="button">刷新</button>
+            </div>
+          </div>
+          <datalist id="repository-list"></datalist>
+          <datalist id="author-list"></datalist>
+
+          <div id="records" aria-live="polite"></div>
+          <div class="empty card" id="empty" hidden>没有符合当前筛选条件的检视记录</div>
+          <nav class="pagination" id="pagination" hidden>
+            <button class="btn" id="page-prev" type="button">上一页</button>
+            <span id="page-info"></span>
+            <button class="btn" id="page-next" type="button">下一页</button>
+          </nav>
+        </section>
+
+        <!-- 数据统计 -->
+        <section class="page" id="page-stats" hidden>
+          <div class="card">
+            <div class="card-head"><h2>各代码仓检视意见</h2><span class="muted" id="repo-chart-total"></span></div>
+            <div class="bar-chart" id="repo-chart"></div>
+          </div>
+          <div class="kpis kpis-6">
+            <div class="kpi"><span class="kpi-label">纳入统计检视</span><strong class="kpi-value" id="token-reviews">—</strong></div>
+            <div class="kpi"><span class="kpi-label">纳入统计 MR</span><strong class="kpi-value" id="token-mrs">—</strong></div>
+            <div class="kpi"><span class="kpi-label">输入 Token</span><strong class="kpi-value" id="token-input">—</strong></div>
+            <div class="kpi"><span class="kpi-label">输出 Token</span><strong class="kpi-value" id="token-output">—</strong></div>
+            <div class="kpi"><span class="kpi-label">总 Token</span><strong class="kpi-value" id="token-total">—</strong></div>
+            <div class="kpi"><span class="kpi-label">平均每次</span><strong class="kpi-value" id="token-avg">—</strong></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Token 明细</h2><span class="muted">最近 200 次检视</span></div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr><th>检视时间</th><th>代码仓 · MR</th><th>标题</th><th class="num">输入</th><th class="num">输出</th><th class="num">缓存输入</th><th class="num">合计</th></tr>
+                </thead>
+                <tbody id="token-rows"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 模型路由 -->
+        <section class="page" id="page-models" hidden>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>模型路由</h2>
+                <p class="muted">每条路由独立配置 Base URL、API Key、思考强度和并发；代码仓绑定到路由，未绑定的仓库使用“兜底”路由。Base URL 留空时使用服务端 .env 中的默认网关。API Key 只保存在服务端，不会回显。</p>
+              </div>
+              <span class="status-text" id="model-status"></span>
+            </div>
+            <p class="notice" id="model-readonly" hidden>仅管理员可修改配置，请先登录。</p>
+            <div class="route-list" id="model-list"></div>
+            <div class="form-row" id="model-actions">
+              <input id="model-input" type="text" maxlength="200" list="model-options" placeholder="输入模型名称，例如 gemini-2.5-flash-lite" />
+              <datalist id="model-options"></datalist>
+              <button class="btn" id="model-add" type="button">添加模型</button>
+              <button class="btn btn-primary" id="model-save" type="button">保存并生效</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 检视范围 -->
+        <section class="page" id="page-scope" hidden>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>检视范围</h2>
+                <p class="muted">为代码仓配置允许的目标分支后，只有合入这些分支的 MR 会被检视，其余记为“已忽略”；未配置的代码仓不受影响。分支名精确匹配、区分大小写。</p>
+              </div>
+              <span class="status-text" id="scope-status"></span>
+            </div>
+            <p class="notice" id="scope-readonly" hidden>仅管理员可修改配置，请先登录。</p>
+            <div class="scope-list" id="scope-list"></div>
+            <div class="form-row" id="scope-actions">
+              <input id="scope-input" type="text" maxlength="200" list="repository-list" placeholder="输入代码仓名称" />
+              <button class="btn" id="scope-add" type="button">添加代码仓</button>
+              <button class="btn btn-primary" id="scope-save" type="button">保存并生效</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- 检视详情抽屉 -->
+    <div class="drawer-mask" id="drawer-mask" hidden></div>
+    <aside class="drawer" id="drawer" aria-hidden="true" role="dialog" aria-label="检视详情">
+      <header class="drawer-head">
+        <div class="drawer-title" id="drawer-title"></div>
+        <button class="icon-btn" id="drawer-close" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </header>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="overview" class="active">概览</button>
+        <button type="button" role="tab" data-tab="findings">检视意见 <span class="count" id="tab-findings-count">0</span></button>
+        <button type="button" role="tab" data-tab="timeline">推理过程 <span class="live" id="live-state"></span></button>
+      </div>
+      <div class="drawer-body" id="drawer-body"></div>
+    </aside>
+
+    <!-- 登录 -->
+    <div class="modal-mask" id="login-mask" hidden>
+      <form class="modal" id="login-form" novalidate>
+        <h2>管理员登录</h2>
+        <p class="muted">登录后可修改配置、重新检视和删除记录</p>
+        <label>账号<input id="login-username" type="text" maxlength="128" autocomplete="username" /></label>
+        <label>密码<input id="login-password" type="password" maxlength="256" autocomplete="current-password" /></label>
+        <p class="form-error" id="login-error" hidden></p>
+        <div class="modal-actions">
+          <button class="btn" id="login-cancel" type="button">取消</button>
+          <button class="btn btn-primary" type="submit">登录</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,86 @@
+"""FastAPI 应用入口：组装运行时、请求日志中间件、API 路由与 Web 控制台静态资源。"""
+from __future__ import annotations
+
+import logging
+import time
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from .api import auth, reviews, settings as settings_api, stats, webhooks
+from .api.deps import AdminTokens
+from .config import Settings, get_settings
+from .logging_config import configure_logging
+from .runtime import ReviewRuntime
+
+LOGGER = logging.getLogger(__name__)
+REQUEST_LOGGER = logging.getLogger("request")
+STATIC_DIR = Path(__file__).with_name("static")
+WEBHOOK_PATHS = {"/api/webhooks/codehub", "/api/webhooks/codehub-note"}
+
+
+def create_app(
+    settings: Settings | None = None, *, runtime: ReviewRuntime | None = None, start_workers: bool = True
+) -> FastAPI:
+    """创建应用。测试时可注入 settings / runtime，并通过 start_workers=False 关闭后台线程。"""
+    settings = settings or get_settings()
+    if bool(settings.admin_username) != bool(settings.admin_password):
+        raise ValueError("ADMIN_USERNAME and ADMIN_PASSWORD must be configured together")
+    settings.ensure_directories()
+    configure_logging(settings.log_dir)
+    runtime = runtime or ReviewRuntime(settings)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        LOGGER.info("application startup env=%s data_dir=%s", settings.app_env, settings.data_dir)
+        if start_workers:
+            runtime.start()
+        try:
+            yield
+        finally:
+            if start_workers:
+                runtime.stop()
+            LOGGER.info("application shutdown")
+
+    app = FastAPI(title="XKL 代码检视平台", version="1.0.0", lifespan=lifespan)
+    app.state.runtime = runtime
+    app.state.admin_tokens = AdminTokens(settings.admin_token_ttl_seconds)
+
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        """记录每个请求的耗时；Webhook 请求额外记录原始载荷便于排查。"""
+        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16]
+        client = request.client.host if request.client else "unknown"
+        if request.url.path in WEBHOOK_PATHS:
+            body = (await request.body()).decode("utf-8", errors="replace")
+            REQUEST_LOGGER.info("[request=%s][client=%s] %s body=%s", request_id, client, request.url.path, body)
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            REQUEST_LOGGER.exception("[request=%s] %s %s -> exception", request_id, request.method, request.url.path)
+            raise
+        response.headers["X-Request-ID"] = request_id
+        REQUEST_LOGGER.info(
+            "[request=%s][client=%s] %s %s -> %s %.1fms",
+            request_id, client, request.method, request.url.path, response.status_code,
+            (time.perf_counter() - started) * 1000,
+        )
+        return response
+
+    for module in (auth, webhooks, reviews, settings_api, stats):
+        app.include_router(module.router)
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def index() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html")
+
+    return app
+
+
+app = create_app()

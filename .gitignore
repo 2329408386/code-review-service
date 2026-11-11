@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenv
+.venv/
+venv/
+
+# Secrets / local config
+.env
+.env.local
+!.env.example
+
+# Runtime data (SQLite DB, repo clones, worktrees, Codex logs) and logs
+data/
+log/
+*.log
+nohup.out
+
+# Restore sources (source-of-truth is now the code itself)
+app_part*.md
+test_part*.md
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Claude Code local-only settings
+.claude/settings.local.json
