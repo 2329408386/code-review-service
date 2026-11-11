@@ -1,6 +1,7 @@
 """FastAPI 应用入口：组装运行时、请求日志中间件、API 路由与 Web 控制台静态资源。"""
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 import uuid
@@ -8,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import auth, local, reviews, settings as settings_api, stats, webhooks
@@ -78,11 +79,23 @@ def create_app(
         app.include_router(module.router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    index_html = _versioned_index()
+
     @app.get("/", include_in_schema=False)
-    def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+    def index() -> HTMLResponse:
+        # 首页不缓存；脚本与样式地址带内容哈希，升级后浏览器不会继续使用旧文件
+        return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
 
     return app
+
+
+def _versioned_index() -> str:
+    """给 index.html 中的 app.js / style.css 引用加上内容哈希版本号。"""
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    for name in ("app.js", "style.css"):
+        digest = hashlib.sha256((STATIC_DIR / name).read_bytes()).hexdigest()[:10]
+        html = html.replace(f"/static/{name}", f"/static/{name}?v={digest}")
+    return html
 
 
 app = create_app()

@@ -227,7 +227,8 @@ def test_health_tokens_and_index(client, runtime):
     tokens = client.get("/api/stats/tokens", params={"limit": 5}).json()
     assert tokens["summary"]["total_tokens"] == 15 and len(tokens["items"]) == 1
     index = client.get("/")
-    assert index.status_code == 200 and "/static/app.js" in index.text
+    assert index.status_code == 200 and "/static/app.js?v=" in index.text and "/static/style.css?v=" in index.text
+    assert index.headers["cache-control"] == "no-cache"
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/health").headers["X-Request-ID"]
 

@@ -381,12 +381,24 @@
     }
   });
 
-  // 筛选：输入框防抖，下拉框立即生效
+  // 筛选：输入时防抖自动搜索；回车或从下拉提示中选择时立即搜索
   let filterTimer = null;
+  function searchNow() {
+    clearTimeout(filterTimer);
+    list.page = 1;
+    loadReviews();
+  }
   for (const id of ["filter-repository", "filter-author"]) {
     $(id).addEventListener("input", () => {
       clearTimeout(filterTimer);
-      filterTimer = setTimeout(() => { list.page = 1; loadReviews(); }, 300);
+      filterTimer = setTimeout(searchNow, 300);
+    });
+    $(id).addEventListener("change", searchNow);
+    $(id).addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        searchNow();
+      }
     });
   }
   for (const id of ["filter-sort", "filter-page-size"]) {
