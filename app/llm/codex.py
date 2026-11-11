@@ -22,7 +22,7 @@ from pathlib import Path
 from ..config import Settings
 from ..models import ReviewOutput
 from ..review.prompts import REVIEW_RETRY_HINT
-from .output import Progress, agent_message, parse_review_output, progress_from_event, token_usage
+from .output import Progress, agent_message, parse_review_output, progress_from_event, stream_error, token_usage
 from .registry import ModelRegistry, ModelRoute
 
 LOGGER = logging.getLogger(__name__)
@@ -231,6 +231,8 @@ class CodexClient:
         events: deque[str] = deque(maxlen=2000)
         stderr: deque[str] = deque(maxlen=2000)
         messages: deque[str] = deque(maxlen=20)
+        # 事件流中的错误（如网关 404、模型不可用）：Codex 失败时 stderr 往往为空，靠它定位原因
+        stream_errors: deque[str] = deque(maxlen=5)
         usage = [0, 0, 0]
         started = time.monotonic()
         try:
@@ -260,6 +262,8 @@ class CodexClient:
                     usage[index] += value
                 if message := agent_message(event):
                     messages.append(message[:MAX_OUTPUT_CHARS])
+                if error := stream_error(event):
+                    stream_errors.append(error[:1000])
                 progress = progress_from_event(event)
                 if progress:
                     events.append(json.dumps(progress.__dict__, ensure_ascii=False) + "\n")
@@ -301,7 +305,7 @@ class CodexClient:
         if timed_out:
             raise CodexError(f"Codex timed out after {TIMEOUT_SECONDS:.0f}s", raw_output=raw)
         if return_code != 0:
-            detail = stderr_text.strip()[-2000:] or "no stderr output"
+            detail = (stream_errors[-1] if stream_errors else "") or stderr_text.strip()[-2000:] or "no error output"
             raise CodexError(f"Codex exited with code {return_code}: {detail}", raw_output=raw)
         return raw, list(messages), (usage[0], usage[1], usage[2]), duration
 

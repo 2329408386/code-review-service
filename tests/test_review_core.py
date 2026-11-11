@@ -6,7 +6,14 @@ import json
 import pytest
 from helpers import candidate, make_task
 
-from app.llm.output import agent_message, parse_review_output, progress_from_event, repair_json_text, token_usage
+from app.llm.output import (
+    agent_message,
+    parse_review_output,
+    progress_from_event,
+    repair_json_text,
+    stream_error,
+    token_usage,
+)
 from app.models import MergeRequestAttributes
 from app.review.diff import (
     DEV_NULL,
@@ -208,6 +215,9 @@ def test_event_helpers():
     final = {"type": "item.completed", "item": {"type": "agent_message", "text": '{"findings": []}'}}
     assert progress_from_event(final) is None
     assert agent_message(final) == '{"findings": []}'
+    assert stream_error({"type": "turn.failed", "error": {"message": "404 模型不可用"}}) == "404 模型不可用"
+    assert stream_error({"type": "error", "message": "Reconnecting... 1/5"}) is None
+    assert stream_error(reasoning) is None
 
 
 # ---------------------------------------------------------------- CodeGraph（可选，失败只降级）

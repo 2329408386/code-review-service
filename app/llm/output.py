@@ -221,3 +221,15 @@ def agent_message(event: object) -> str | None:
         return None
     text = item.get("text")
     return str(text).strip() or None if text else None
+
+
+def stream_error(event: object) -> str | None:
+    """提取 turn.failed / error 事件中的错误信息（重连提示不算最终错误）。"""
+    if not isinstance(event, dict):
+        return None
+    if event.get("type") == "turn.failed" and isinstance(event.get("error"), dict):
+        return str(event["error"].get("message") or "") or None
+    if event.get("type") == "error":
+        message = str(event.get("message") or "")
+        return None if message.startswith("Reconnecting") else message or None
+    return None
