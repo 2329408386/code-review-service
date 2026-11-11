@@ -64,9 +64,9 @@ def test_registry_routes_keys_and_validation(settings, database):
 # ---------------------------------------------------------------- Codex CLI
 
 
-def _client(settings, database, tmp_path, outputs, **kwargs):
+def _client(settings, database, tmp_path, monkeypatch, outputs, **kwargs):
     bin_dir = tmp_path / "bin"
-    settings.codex_command = str(fake_codex(bin_dir, outputs, **kwargs))
+    fake_codex(bin_dir, outputs, monkeypatch=monkeypatch, **kwargs)
     settings.openai_api_base_url = "http://gw/v1"
     settings.openai_api_key = "secret-key"
     settings.openai_model = "gemini"
@@ -83,8 +83,8 @@ def _review(client, registry, tmp_path, progress=None):
     )
 
 
-def test_codex_review_success(settings, database, tmp_path):
-    client, registry, bin_dir = _client(settings, database, tmp_path, [GOOD])
+def test_codex_review_success(settings, database, tmp_path, monkeypatch):
+    client, registry, bin_dir = _client(settings, database, tmp_path, monkeypatch, [GOOD])
     assert client.available and client.version == "codex-cli 9.9.9"
     seen = []
     result = _review(client, registry, tmp_path, seen.append)
@@ -104,8 +104,8 @@ def test_codex_review_success(settings, database, tmp_path):
     assert list(settings.prompt_log_dir.iterdir())
 
 
-def test_codex_retries_invalid_output_then_succeeds(settings, database, tmp_path):
-    client, registry, bin_dir = _client(settings, database, tmp_path, ["not json", GOOD])
+def test_codex_retries_invalid_output_then_succeeds(settings, database, tmp_path, monkeypatch):
+    client, registry, bin_dir = _client(settings, database, tmp_path, monkeypatch, ["not json", GOOD])
     result = _review(client, registry, tmp_path)
     assert len(result.output.findings) == 1
     calls = codex_calls(bin_dir)
@@ -113,14 +113,14 @@ def test_codex_retries_invalid_output_then_succeeds(settings, database, tmp_path
     assert result.input_tokens == 200  # 失败尝试的 Token 也计入
 
 
-def test_codex_failure_raises(settings, database, tmp_path):
-    client, registry, _ = _client(settings, database, tmp_path, [GOOD], exit_code=3)
+def test_codex_failure_raises(settings, database, tmp_path, monkeypatch):
+    client, registry, _ = _client(settings, database, tmp_path, monkeypatch, [GOOD], exit_code=3)
     with pytest.raises(CodexError, match="exited with code 3"):
         _review(client, registry, tmp_path)
 
 
-def test_codex_without_gateway_uses_local_config(settings, database, tmp_path):
-    settings.codex_command = str(fake_codex(tmp_path / "bin", [GOOD]))
+def test_codex_without_gateway_uses_local_config(settings, database, tmp_path, monkeypatch):
+    fake_codex(tmp_path / "bin", [GOOD], monkeypatch=monkeypatch)
     client = CodexClient(settings, ModelRegistry(database, settings))
     worktree = tmp_path / "wt"
     worktree.mkdir()

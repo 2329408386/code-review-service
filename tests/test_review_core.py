@@ -16,13 +16,8 @@ from app.review.diff import (
     parse_unified_diff,
     plan_review_chunks,
 )
-from app.review.findings import (
-    UNVERIFIED_CONFIRMATION,
-    deduplicate_findings,
-    merge_verification,
-    validate_findings,
-)
-from app.review.prompts import build_evaluation_prompt, build_review_prompt, build_verification_prompt
+from app.review.findings import deduplicate_findings, validate_findings
+from app.review.prompts import build_evaluation_prompt, build_review_prompt
 from app.review.scope import ReviewScopeError, ReviewScopeRegistry, skip_reason
 
 MODIFIED = """diff --git a/app.py b/app.py
@@ -132,17 +127,10 @@ def test_validate_findings_positions():
     assert len(result.rejected) == 4
 
 
-def test_deduplicate_and_merge_verification():
+def test_deduplicate_findings():
     a = candidate(line=2, title="空指针")
-    assert deduplicate_findings([a, candidate(line=2, title=" 空指针 ")]) == [a]
-
-    discovered = [candidate(line=2, title="A"), candidate(line=3, title="B"), candidate(line=3, title="C")]
-    verified = [candidate(line=2, title="A 改写"), candidate(line=3, title="B")]
-    merged, unverified = merge_verification(discovered, verified)
-    titles = [item.title for item in merged]
-    # 第 2 行一对一视为改写；第 3 行 C 未被确认，追加确认提示
-    assert titles == ["A 改写", "B", "C"]
-    assert unverified == 1 and merged[2].body.endswith(UNVERIFIED_CONFIRMATION)
+    b = candidate(line=3, title="空指针")
+    assert deduplicate_findings([a, candidate(line=2, title=" 空指针 "), b]) == [a, b]
 
 
 # ---------------------------------------------------------------- 提示词
@@ -152,8 +140,6 @@ def test_prompts_include_scope_and_rules():
     diff = parse_unified_diff(MODIFIED)
     prompt = build_review_prompt(make_task(), diff)
     assert "app.py" in prompt and "+    value = None" in prompt
-    verify = build_verification_prompt(make_task(), diff, [candidate()])
-    assert "空指针" in verify
     evaluation = build_evaluation_prompt(make_task(), [])
     assert "总体评价" in evaluation
 
@@ -200,6 +186,11 @@ def test_parse_review_output_variants():
     finding = parse_review_output(json.dumps(aliased)).findings[0]
     assert (finding.new_path, finding.new_line, finding.severity) == ("b.py", 2, "major")
     assert parse_review_output('[]').findings == []
+    # 意见中多余的字段被忽略；单条意见对象不能被当成完整结论
+    extra = {"summary": "", "findings": [{**plain["findings"][0], "src": ""}]}
+    assert len(parse_review_output(json.dumps(extra)).findings) == 1
+    with pytest.raises(ValueError):
+        parse_review_output(json.dumps(plain["findings"][0]))
     assert parse_review_output('{"summary": "x\n", "findings": [],}').summary == "x"
     with pytest.raises(ValueError):
         parse_review_output("没有 JSON")
@@ -225,16 +216,16 @@ def test_event_helpers():
 def test_codegraph_indexer(settings, tmp_path):
     from app.review.codegraph import CodeGraphIndexer
 
-    settings.codegraph_command = str(tmp_path / "missing-codegraph")
     missing = CodeGraphIndexer(settings)
+    missing.command = str(tmp_path / "missing-codegraph")
     assert not missing.installed and missing.version is None
     assert not missing.build_index(tmp_path).success
 
     script = tmp_path / "codegraph"
     script.write_text('#!/bin/sh\n[ "$1" = "--version" ] && echo cg-1.0 && exit 0\n[ -f fail ] && exit 2\nmkdir -p .codegraph\n')
     script.chmod(0o755)
-    settings.codegraph_command = str(script)
     indexer = CodeGraphIndexer(settings)
+    indexer.command = str(script)
     assert indexer.version == "cg-1.0"
     assert indexer.build_index(tmp_path).success and (tmp_path / ".codegraph").is_dir()
     (tmp_path / "fail").write_text("")

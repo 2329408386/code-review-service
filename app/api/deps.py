@@ -14,7 +14,7 @@ from ..runtime import ReviewRuntime
 class AdminTokens:
     """内存中的管理员登录令牌（服务重启后需重新登录）。"""
 
-    def __init__(self, ttl_seconds: int):
+    def __init__(self, ttl_seconds: int = 12 * 3600):
         self.ttl_seconds = ttl_seconds
         self._tokens: dict[str, float] = {}
         self._lock = threading.Lock()

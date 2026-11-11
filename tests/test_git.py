@@ -14,11 +14,11 @@ def _task(repo, source, target, **overrides):
 def test_repository_url_helpers():
     assert repository_name_from_url("git@host.com:group/demo.git") == "demo"
     assert repository_name_from_url("https://host.com/group/sub/demo") == "demo"
-    validate_repository_url("git@host.com:g/r.git", allowed_hosts=frozenset({"host.com"}), allow_local_paths=False)
-    validate_repository_url("ssh://git@host.com:22/g/r.git", allowed_hosts=frozenset({"host.com"}), allow_local_paths=False)
+    validate_repository_url("git@host.com:g/r.git", allowed_hosts=frozenset({"host.com"}))
+    validate_repository_url("ssh://git@host.com:22/g/r.git", allowed_hosts=frozenset({"host.com"}))
     for url in ("git@evil.com:g/r.git", "/tmp/repo", "file:///tmp/repo"):
         with pytest.raises(GitError):
-            validate_repository_url(url, allowed_hosts=frozenset({"host.com"}), allow_local_paths=False)
+            validate_repository_url(url, allowed_hosts=frozenset({"host.com"}))
 
 
 def test_prepare_full_diff_and_cleanup(settings, tmp_path):
@@ -76,3 +76,16 @@ def test_prepare_rejects_unknown_commit(settings, tmp_path):
         manager.prepare(_task(repo, "f" * 40, target))
     with pytest.raises(GitError, match="invalid"):
         manager.prepare(_task(repo, "not-a-sha", target))
+
+
+def test_describe_local_commit(settings, tmp_path):
+    repo, target, source = feature_repo(tmp_path)
+    (repo / "sub").mkdir()
+    commit = RepositoryManager(settings).describe_local_commit(str(repo / "sub"))
+    assert (commit.repository, commit.name, commit.sha, commit.parent) == (str(repo), "demo", source, target)
+    assert (commit.branch, commit.subject, commit.author) == ("feature/x", "change", "Test")
+    root = RepositoryManager(settings).describe_local_commit(str(repo), target)
+    assert root.parent == ""  # 根提交
+    for path, revision in (("relative", "HEAD"), (str(tmp_path / "missing"), "HEAD"), (str(repo), "nope")):
+        with pytest.raises(GitError):
+            RepositoryManager(settings).describe_local_commit(path, revision)

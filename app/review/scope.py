@@ -106,6 +106,4 @@ def skip_reason(
             f"{repository} 仅检视目标分支 {'、'.join(allowed)}，"
             f"目标分支 {attrs.target_branch} 不在允许列表，跳过代码检视"
         )
-    if attrs.target_branch in settings.skipped_target_branches(repository):
-        return f"{repository} 目标分支 {attrs.target_branch} 命中白名单，跳过代码检视"
     return None

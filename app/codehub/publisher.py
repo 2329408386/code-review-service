@@ -19,6 +19,10 @@ from .client import CodeHubClient, CodeHubError
 LOGGER = logging.getLogger(__name__)
 COMMENT = "comment"
 EVALUATION = "evaluation"
+# CodeHub 要求两次写请求间隔不少于 5 秒
+RATE_INTERVAL_SECONDS = 5.1
+RETRY_INTERVAL_SECONDS = 10.0
+MAX_ATTEMPTS = 3
 
 
 class Publisher:
@@ -33,9 +37,9 @@ class Publisher:
     ):
         self.database = database
         self.client = client
-        self.interval = settings.comment_rate_interval_seconds
-        self.retry_interval = settings.comment_retry_interval_seconds
-        self.max_attempts = settings.comment_max_attempts
+        self.interval = RATE_INTERVAL_SECONDS
+        self.retry_interval = RETRY_INTERVAL_SECONDS
+        self.max_attempts = MAX_ATTEMPTS
         self._clock = clock
         self._sleep = sleep
         self._last_request_at: float | None = None

@@ -26,7 +26,7 @@ def runtime(client) -> ReviewRuntime:
 
 
 def login(client) -> dict:
-    token = client.post("/api/auth/login", json={"username": "l00003834", "password": "123456"}).json()["token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "secret"}).json()["token"]
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -110,7 +110,7 @@ def test_note_webhook(client, runtime, monkeypatch):
 
 def test_auth_flow(client):
     assert client.get("/api/auth/status").json() == {"admin": False, "username": None}
-    assert client.post("/api/auth/login", json={"username": "l00003834", "password": "bad"}).status_code == 401
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "bad"}).status_code == 401
     headers = login(client)
     assert client.get("/api/auth/status", headers=headers).json()["admin"]
     client.post("/api/auth/logout", headers=headers)
@@ -232,6 +232,12 @@ def test_health_tokens_and_index(client, runtime):
     assert client.get("/health").headers["X-Request-ID"]
 
 
+def test_admin_disabled_without_credentials(settings):
+    settings.admin_username = settings.admin_password = ""
+    with TestClient(create_app(settings, start_workers=False)) as client:
+        assert client.post("/api/auth/login", json={"username": "a", "password": "b"}).status_code == 403
+
+
 def test_create_app_rejects_half_admin_config(settings):
     settings.admin_password = ""
     with pytest.raises(ValueError):
@@ -241,11 +247,10 @@ def test_create_app_rejects_half_admin_config(settings):
 # ---------------------------------------------------------------- 运行时（真实工作线程）
 
 
-def test_runtime_end_to_end(settings, tmp_path):
+def test_runtime_end_to_end(settings, tmp_path, monkeypatch):
     repo, target, source = feature_repo(tmp_path)
     finding = {"new_path": "app.py", "new_line": 3, "severity": "major", "title": "空指针", "body": "b"}
-    settings.codex_command = str(fake_codex(tmp_path / "bin", [{"summary": "", "findings": [finding]}]))
-    settings.max_review_concurrency = 1
+    fake_codex(tmp_path / "bin", [{"summary": "", "findings": [finding]}], monkeypatch=monkeypatch)
     runtime = ReviewRuntime(settings)
     runtime.start()
     try:
@@ -269,3 +274,62 @@ def test_runtime_end_to_end(settings, tmp_path):
     finally:
         runtime.stop()
     assert not runtime.publisher.is_alive()
+
+
+# ---------------------------------------------------------------- 本地提交检视（post-commit 钩子）
+
+
+def test_local_review_endpoint(client, runtime, tmp_path):
+    repo, target, source = feature_repo(tmp_path)
+    body = {"path": str(repo)}
+    # TestClient 不是回环地址：未登录时拒绝，防止借此读取服务器上的任意目录
+    assert client.post("/api/local-reviews", json=body).status_code == 403
+    headers = login(client)
+    response = client.post("/api/local-reviews", json=body, headers=headers)
+    assert response.status_code == 202
+    task = runtime.database.get_task(response.json()["task_id"])
+    assert (task.origin, task.source_sha, task.target_sha, task.repository_name) == ("local", source, target, "demo")
+    assert task.title == "change" and task.action == "commit"
+    assert runtime.queue_size() == 1
+
+    duplicate = client.post("/api/local-reviews", json=body, headers=headers).json()
+    assert duplicate["status"] == "duplicate"
+    root = client.post("/api/local-reviews", json={"path": str(repo), "sha": target}, headers=headers).json()
+    assert root["status"] == "ignored"
+    assert client.post("/api/local-reviews", json={"path": "relative"}, headers=headers).status_code == 422
+
+
+def test_local_review_allows_loopback(client, runtime, tmp_path, monkeypatch):
+    from app.api import local
+
+    repo, _, _ = feature_repo(tmp_path)
+    monkeypatch.setattr(local, "LOOPBACK_HOSTS", {"testclient"})
+    assert client.post("/api/local-reviews", json={"path": str(repo)}).status_code == 202
+
+
+def test_installed_git_hook_posts_commit(tmp_path):
+    """安装脚本生成的钩子在提交后发出请求（用假 curl 记录参数）。"""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    repo, _, _ = feature_repo(tmp_path)
+    script = Path(__file__).resolve().parents[1] / "scripts" / "install-git-hook.sh"
+    subprocess.run([str(script), str(repo)], check=True, capture_output=True)
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    log = tmp_path / "curl.log"
+    (bin_dir / "curl").write_text(f'#!/bin/sh\necho "$@" >> {log}\n')
+    (bin_dir / "curl").chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "CODE_REVIEW_URL": "http://svc:1"}
+    (repo / "more.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "more"], cwd=repo, check=True, env=env)
+    deadline = time.time() + 5
+    while time.time() < deadline and not log.exists():
+        time.sleep(0.05)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    sent = log.read_text()
+    assert "http://svc:1/api/local-reviews" in sent and head in sent and str(repo) in sent
+    # 重复安装是幂等的
+    subprocess.run([str(script), str(repo)], check=True, capture_output=True)

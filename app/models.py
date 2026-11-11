@@ -148,9 +148,9 @@ class ReviewScopeInput(BaseModel):
 
 
 class FindingCandidate(BaseModel):
-    """模型给出的一条检视意见（尚未校验定位）。"""
+    """模型给出的一条检视意见（尚未校验定位）。模型偶尔附带的多余字段直接忽略。"""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     new_path: str = Field(min_length=1, max_length=1000)
     old_path: str | None = Field(default=None, max_length=1000)
@@ -161,10 +161,11 @@ class FindingCandidate(BaseModel):
 
 
 class ReviewOutput(BaseModel):
+    # 顶层保持严格且 findings 必填：避免把正文中扫描到的单条意见对象误当成“空结论”
     model_config = ConfigDict(extra="forbid")
 
     summary: str = Field(default="", max_length=4000)
-    findings: list[FindingCandidate] = Field(default_factory=list)
+    findings: list[FindingCandidate]
 
 
 # ============ 持久化记录 ============
@@ -183,6 +184,8 @@ class ReviewTask(BaseModel):
     old_source_sha: str | None = None
     target_sha: str | None = None
     action: str
+    # codehub：MR 检视，结果回写 CodeHub；local：本地提交检视，结果只在平台展示
+    origin: str = "codehub"
     title: str = ""
     description: str = ""
     author: str = ""

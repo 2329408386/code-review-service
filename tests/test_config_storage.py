@@ -14,20 +14,12 @@ from app.storage import Database, derive_mr_url
 
 
 def test_settings_defaults_and_helpers(tmp_path):
-    settings = Settings(
-        _env_file=None,
-        data_dir=tmp_path,
-        skip_source_branches="develop, release ",
-        skip_review_rules='[{"repository": "demo", "target_branches": ["hotfix"]}]',
-        allowed_repository_hosts="a.com,b.com",
-    )
-    assert settings.port == 8083
-    assert settings.admin_enabled
+    settings = Settings(_env_file=None, data_dir=tmp_path, skip_source_branches="develop, release ", allowed_repository_hosts="A.com,b.com")
+    assert not settings.admin_enabled  # 默认不启用管理员
     assert settings.skipped_source_branches() == {"develop", "release"}
-    assert settings.skipped_target_branches("demo") == {"hotfix"}
-    assert settings.skipped_target_branches("other") == frozenset()
     assert settings.repository_hosts() == {"a.com", "b.com"}
-    assert "*.min.js" in settings.skip_patterns()
+    # 调优参数已改为内部常量，环境变量中残留的旧配置会被忽略
+    assert Settings(_env_file=None, max_review_concurrency=1, codex_command="x")
 
 
 def test_configure_logging_writes_files(tmp_path):

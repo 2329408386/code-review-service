@@ -70,11 +70,7 @@ def merge_request_event(payload: MergeRequestWebhook, runtime: Runtime) -> JSONR
         return JSONResponse({"accepted": False, "status": "ignored", "reason": reason, "task_id": task.id})
 
     try:
-        validate_repository_url(
-            repository_url,
-            allowed_hosts=runtime.settings.repository_hosts(),
-            allow_local_paths=runtime.settings.allow_local_repository_paths,
-        )
+        validate_repository_url(repository_url, allowed_hosts=runtime.settings.repository_hosts())
     except GitError as exc:
         LOGGER.warning("webhook rejected project=%s mr=%s: %s", payload.project.id, attrs.iid, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc

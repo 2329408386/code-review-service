@@ -18,6 +18,9 @@ from .diff import ParsedDiff, parse_unified_diff
 
 LOGGER = logging.getLogger(__name__)
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+GIT_TIMEOUT_SECONDS = 120.0
+# Diff 上下文行数：给模型足够的周边代码
+DIFF_CONTEXT_LINES = 12
 
 
 class GitError(RuntimeError):
@@ -41,6 +44,20 @@ class BuiltDiff:
     merge_base_candidates: int = 1
 
 
+@dataclass(frozen=True)
+class LocalCommit:
+    """本地仓库中的一次提交（用于“本地提交检视”：父提交..本提交）。"""
+
+    repository: str  # 仓库根目录的绝对路径
+    name: str
+    sha: str
+    parent: str  # 根提交没有父提交时为空
+    branch: str
+    subject: str
+    body: str
+    author: str
+
+
 def repository_name_from_url(url: str) -> str:
     value = url.rstrip("/")
     parsed = urlparse(value)
@@ -51,24 +68,23 @@ def repository_name_from_url(url: str) -> str:
     return (value.rsplit("/", 1)[-1] or "unknown-repository").removesuffix(".git")
 
 
-def validate_repository_url(url: str, *, allowed_hosts: frozenset[str], allow_local_paths: bool) -> None:
-    """Webhook 提供的 clone 地址必须位于配置的主机白名单内（防止被诱导访问任意地址）。"""
+def validate_repository_url(url: str, *, allowed_hosts: frozenset[str]) -> None:
+    """Webhook 提供的 clone 地址必须位于配置的主机白名单内（防止被诱导访问任意地址）。
+
+    本地仓库只能通过 /api/local-reviews（仅限本机调用）提交，Webhook 一律拒绝本地路径。
+    """
     value = url.strip()
     parsed = urlparse(value)
     if parsed.scheme == "file":
-        if allow_local_paths and Path(parsed.path).is_absolute():
-            return
-        raise GitError("local file repository URLs are disabled")
+        raise GitError("local file repository URLs are not allowed")
     if parsed.scheme:
         if parsed.scheme not in {"ssh", "https", "http"}:
             raise GitError(f"repository URL scheme is not allowed: {parsed.scheme}")
         host = parsed.hostname or ""
     elif match := re.fullmatch(r"(?:[^@/:]+@)?([^/:]+):(.+)", value):  # scp 风格 git@host:path
         host = match.group(1)
-    elif allow_local_paths and Path(value).is_absolute():
-        return
     else:
-        raise GitError("local repository paths are disabled")
+        raise GitError("local repository paths are not allowed")
     if host.lower() not in allowed_hosts:
         raise GitError("repository host is not in ALLOWED_REPOSITORY_HOSTS")
 
@@ -97,7 +113,7 @@ class RepositoryManager:
                 encoding="utf-8",
                 errors="replace",
                 capture_output=True,
-                timeout=self.settings.git_command_timeout_seconds,
+                timeout=GIT_TIMEOUT_SECONDS,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
@@ -194,6 +210,21 @@ class RepositoryManager:
     def cleanup(self, prepared: PreparedRepository) -> None:
         self._remove_clone(prepared.worktree_path)
 
+    # ---------------------------------------------------------------- 本地提交
+
+    def describe_local_commit(self, path: str, revision: str = "HEAD") -> LocalCommit:
+        """读取本地仓库中某次提交的元数据；路径不是 Git 仓库或提交不存在时抛出 GitError。"""
+        if not Path(path).is_absolute() or not Path(path).is_dir():
+            raise GitError("path must be an existing absolute directory")
+        root = self._git("-C", path, "rev-parse", "--show-toplevel")
+        sha = self._git("-C", root, "rev-parse", "--verify", f"{revision}^{{commit}}")
+        parent = self._git("-C", root, "rev-parse", "--verify", "-q", f"{sha}^1^{{commit}}", check=False)
+        branch = self._git("-C", root, "symbolic-ref", "--short", "-q", "HEAD", check=False) or "HEAD"
+        subject, body, author = (
+            self._git("-C", root, "log", "-1", "--format=%s%x00%b%x00%an", sha).split("\0") + ["", ""]
+        )[:3]
+        return LocalCommit(root, Path(root).name, sha, parent, branch, subject.strip(), body.strip(), author.strip())
+
     # ---------------------------------------------------------------- 构建 Diff
 
     def _resolve_target(self, mirror: Path, task: ReviewTask) -> str:
@@ -247,7 +278,7 @@ class RepositoryManager:
             target_commits = int(self._git("-C", worktree, "rev-list", "--count", f"{base_sha}..{target_sha}"))
         diff_text = self._git(
             "-C", worktree, "diff", "--no-ext-diff", "--find-renames",
-            f"--unified={self.settings.review_diff_context_lines}", base_sha, source_sha, "--",
+            f"--unified={DIFF_CONTEXT_LINES}", base_sha, source_sha, "--",
             raw=True,
         )
         parsed = parse_unified_diff(diff_text)

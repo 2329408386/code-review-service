@@ -51,7 +51,9 @@ def list_models(gateway: Gateway, *, timeout: float = 30.0) -> list[str]:
     return list(dict.fromkeys(name for name in names if name))
 
 
-def complete(gateway: Gateway, model: str, prompt: str, *, timeout: float, max_attempts: int) -> ChatResult:
+def complete(
+    gateway: Gateway, model: str, prompt: str, *, timeout: float = 120.0, max_attempts: int = 2
+) -> ChatResult:
     """POST {base_url}/chat/completions；网络错误和 5xx/429 会重试。"""
     body = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
     error: Exception | None = None

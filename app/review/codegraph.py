@@ -15,6 +15,8 @@ from pathlib import Path
 from ..config import Settings
 
 LOGGER = logging.getLogger(__name__)
+COMMAND = "codegraph"
+INDEX_TIMEOUT_SECONDS = 1800.0
 
 
 @dataclass(frozen=True)
@@ -27,7 +29,7 @@ class IndexResult:
 class CodeGraphIndexer:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.command = settings.codegraph_command
+        self.command = COMMAND
 
     @property
     def enabled(self) -> bool:
@@ -55,7 +57,7 @@ class CodeGraphIndexer:
         if not self.installed:
             return IndexResult(False, 0.0, "codegraph CLI not found")
         started = time.perf_counter()
-        timeout = self.settings.codegraph_index_timeout_seconds
+        timeout = INDEX_TIMEOUT_SECONDS
         try:
             result = subprocess.run(
                 [self.command, "init"], cwd=worktree, text=True, capture_output=True, timeout=timeout, check=False

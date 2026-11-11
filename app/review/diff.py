@@ -19,6 +19,11 @@ _BINARY_SUFFIXES = (
     ".7z", ".mp3", ".mp4", ".mov", ".avi", ".woff", ".woff2", ".ttf", ".so", ".dll", ".class",
 )
 _LOCK_FILES = {"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "cargo.lock"}
+# 不参与语义检视的文件（fnmatch 模式）：数据 / 生成物 / 第三方代码 / 前端产物
+SKIP_PATTERNS = (
+    "*.json", "*.lock", "*.min.js", "*.min.css", "*.map", "*.html", "*.htm", "*.svg",
+    "*/node_modules/*", "*/vendor/*", "*/.git/*", "*/generated/*", "*/__generated__/*", "*.generated.*", "*.gen.*",
+)
 
 
 def normalize_path(path: str) -> str:
@@ -198,7 +203,7 @@ def is_reviewable_path(path: str, patterns: tuple[str, ...]) -> bool:
     return not any(fnmatch.fnmatch(normalized, pattern) or fnmatch.fnmatch(name, pattern) for pattern in patterns)
 
 
-def filter_reviewable(parsed: ParsedDiff, patterns: tuple[str, ...]) -> ParsedDiff:
+def filter_reviewable(parsed: ParsedDiff, patterns: tuple[str, ...] = SKIP_PATTERNS) -> ParsedDiff:
     """去掉二进制、锁文件和匹配跳过模式的文件；删除文件按其真实旧路径判断。"""
     return ParsedDiff(
         files=[file for file in parsed.files if not file.is_binary and is_reviewable_path(file.path, patterns)]

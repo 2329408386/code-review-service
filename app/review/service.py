@@ -2,6 +2,8 @@
 
 准备仓库 → 构建并过滤 Diff → 规划分片 →（大任务延后到晚间）→ 建 CodeGraph 索引
 → 分片并发调用 Codex → 定位校验 / 去重 → 落库 → 评论与 MR 评价入队 → 清理 clone。
+
+本地提交（origin=local）走同样的流程，但意见与评价只保存在平台，不回写 CodeHub。
 """
 from __future__ import annotations
 
@@ -21,14 +23,24 @@ from ..llm.codex import DEFAULT_MODEL_LABEL, CodexClient, CodexError, CodexResul
 from ..llm.output import Progress
 from ..llm.registry import ModelRegistry, ModelRoute
 from ..models import FindingCandidate, ReviewTask
-from ..storage import Database
+from ..storage import ORIGIN_LOCAL, Database
 from .codegraph import CodeGraphIndexer
 from .diff import ParsedDiff, ReviewChunk, filter_reviewable, plan_review_chunks
-from .findings import deduplicate_findings, merge_verification, validate_findings
+from .findings import deduplicate_findings, validate_findings
 from .git import PreparedRepository, RepositoryManager
-from .prompts import build_evaluation_prompt, build_large_file_prompt, build_review_prompt, build_verification_prompt
+from .prompts import build_evaluation_prompt, build_large_file_prompt, build_review_prompt
 
 LOGGER = logging.getLogger(__name__)
+
+# ---------- 分片与调度参数（内部常量，按经验取值）
+MAX_CHUNK_BYTES = 200_000  # 单个分片的 Diff 字节上限（按完整文件 / hunk 切分，不截断）
+MAX_CHUNKS = 100  # 分片数超过该值直接忽略，避免超大 MR 占满模型
+LARGE_NEW_FILE_LINES = 2000  # 新增文件超过该行数时整文件单轮直检
+CHUNK_WORKERS = 5  # 单个任务内同时检视的分片数（实际并发还受模型路由并发度限制）
+DEFER_CHUNK_THRESHOLD = 3  # 分片数超过该值的大任务白天提交时延后执行
+DEFER_START_HOUR = 20  # 大任务的开始时间（北京时间）
+SCHEDULE_TIMEZONE = ZoneInfo("Asia/Shanghai")
+EVENT_DETAIL_MAX_CHARS = 4000
 
 
 @dataclass
@@ -41,7 +53,6 @@ class ChunkResult:
     duration: float = 0.0
     passes: int = 0
     rejected: int = 0
-    unverified: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
@@ -76,9 +87,9 @@ class ReviewService:
         self.publisher = publisher
 
     def _event(self, task_id: str, stage: str, status: str, message: str, detail: str | None = None) -> None:
-        limit = self.settings.review_event_detail_max_chars
         self.database.append_event(
-            task_id, stage=stage, status=status, message=message, detail=detail[:limit] if detail else None
+            task_id, stage=stage, status=status, message=message,
+            detail=detail[:EVENT_DETAIL_MAX_CHARS] if detail else None,
         )
 
     # ================================================================ 主流程
@@ -114,7 +125,7 @@ class ReviewService:
         # ---------- 构建检视范围
         self._event(task.id, "diff", "started", "正在构建 MR 检视范围")
         built = self.repositories.build_diff(prepared, task)
-        diff = filter_reviewable(built.parsed, self.settings.skip_patterns())
+        diff = filter_reviewable(built.parsed)
         files = diff.reviewable_files
         added_lines = sum(len(file.added_lines) for file in files)
         self._event(
@@ -135,11 +146,9 @@ class ReviewService:
             return
 
         # ---------- 规划分片
-        chunks = plan_review_chunks(
-            diff, self.settings.max_prompt_diff_bytes, large_new_file_lines=self.settings.large_new_file_line_threshold
-        )
-        if len(chunks) > self.settings.max_review_chunks:
-            reason = f"检视分片 {len(chunks)} 个超过上限 {self.settings.max_review_chunks} 个，已过滤代码检视"
+        chunks = plan_review_chunks(diff, MAX_CHUNK_BYTES, large_new_file_lines=LARGE_NEW_FILE_LINES)
+        if len(chunks) > MAX_CHUNKS:
+            reason = f"检视分片 {len(chunks)} 个超过上限 {MAX_CHUNKS} 个，已过滤代码检视"
             self.database.mark_ignored(task.id, reason)
             self._event(task.id, "queue", "warning", reason)
             return
@@ -148,7 +157,7 @@ class ReviewService:
             self.database.mark_scheduled(task.id, start_at=start_at, chunk_count=len(chunks))
             self._event(
                 task.id, "queue", "pending",
-                f"检视分片 {len(chunks)} 个，已安排至 {self.settings.large_review_start_hour:02d}:00 后执行",
+                f"检视分片 {len(chunks)} 个，已安排至 {DEFER_START_HOUR:02d}:00 后执行",
                 f"scheduled_start_at={start_at.isoformat()}",
             )
             return
@@ -158,11 +167,11 @@ class ReviewService:
         self._build_codegraph(task.id, worktree)
         self.database.record_model_usage(task.id, route.name if route else DEFAULT_MODEL_LABEL)
         direct = [chunk for chunk in chunks if chunk.direct_llm]
-        workers = min(len(chunks), self.settings.max_chunk_review_concurrency)
+        workers = min(len(chunks), CHUNK_WORKERS)
         self._event(
             task.id, "quality", "progress",
             f"Diff 已规划为 {len(chunks)} 个检视单元（常规分片 {len(chunks) - len(direct)} 个，"
-            f"超 {self.settings.large_new_file_line_threshold} 行新增文件直检 {len(direct)} 个），"
+            f"超 {LARGE_NEW_FILE_LINES} 行新增文件直检 {len(direct)} 个），"
             f"最多 {workers} 个分片并发检视，不截断任何 hunk",
             "; ".join(chunk.diff.files[0].path for chunk in direct) or None,
         )
@@ -176,11 +185,11 @@ class ReviewService:
         # ---------- 汇总落库
         findings = deduplicate_findings([item for result in results for item in result.findings])
         rejected = sum(result.rejected for result in results)
-        unverified = sum(result.unverified for result in results)
         self._event(
             task.id, "quality", "completed",
-            f"质量门禁完成：{len(findings)} 条有效意见，其中 {unverified} 条待用户确认，拒绝 {rejected} 条非法定位或结构",
+            f"质量门禁完成：{len(findings)} 条有效意见，拒绝 {rejected} 条非法定位或结构",
         )
+        local = task.origin == ORIGIN_LOCAL
         finding_ids = self.database.complete_review(
             task.id,
             findings,
@@ -197,23 +206,25 @@ class ReviewService:
                 "token_output": sum(r.output_tokens for r in results),
                 "token_cached_input": sum(r.cached_tokens for r in results),
             },
+            comment_status=ORIGIN_LOCAL if local else "pending",
         )
         self._event(task.id, "review", "completed", f"检视完成：发现 {len(findings)} 条有效问题")
-        for finding_id in finding_ids:
-            self.publisher.enqueue_comment(finding_id)
-        if finding_ids:
-            self._event(task.id, "comment", "pending", f"{len(finding_ids)} 条意见已进入评论发送队列")
+        if not local:
+            for finding_id in finding_ids:
+                self.publisher.enqueue_comment(finding_id)
+            if finding_ids:
+                self._event(task.id, "comment", "pending", f"{len(finding_ids)} 条意见已进入评论发送队列")
         self._queue_evaluation(task.id, route)
         LOGGER.info("[task=%s] review success findings=%s rejected=%s", task.id, len(findings), rejected)
 
     def _deferred_start(self, chunk_count: int) -> datetime | None:
         """大任务（分片数超过阈值）白天提交时延后到晚间开始执行。"""
-        if chunk_count <= self.settings.large_review_chunk_threshold:
+        if chunk_count <= DEFER_CHUNK_THRESHOLD:
             return None
-        now = datetime.now(ZoneInfo(self.settings.review_schedule_timezone))
-        if now.hour >= self.settings.large_review_start_hour:
+        now = datetime.now(SCHEDULE_TIMEZONE)
+        if now.hour >= DEFER_START_HOUR:
             return None
-        start = now.replace(hour=self.settings.large_review_start_hour, minute=0, second=0, microsecond=0)
+        start = now.replace(hour=DEFER_START_HOUR, minute=0, second=0, microsecond=0)
         return start.astimezone(UTC)
 
     def _build_codegraph(self, task_id: str, worktree: Path) -> None:
@@ -259,7 +270,7 @@ class ReviewService:
         self._event(
             task.id, stage, "started",
             f"开始第 {index}/{total} 个超大新增文件的单轮直接检视" if chunk.direct_llm
-            else f"开始第 {index}/{total} 个分片的候选问题发现",
+            else f"开始第 {index}/{total} 个分片的检视",
         )
         prompt = build_large_file_prompt(task, chunk.diff) if chunk.direct_llm else build_review_prompt(task, chunk.diff)
         discovery = self._run_codex(task, worktree, prompt, stage, f"{kind}-{index}", route)
@@ -268,33 +279,10 @@ class ReviewService:
         discovered = self._validate(result, discovery.output.findings, chunk.diff)
         self._event(
             task.id, stage, "completed",
-            f"{'超大新增文件直检' if chunk.direct_llm else '候选发现'}完成：模型输出 "
+            f"{'超大新增文件直检' if chunk.direct_llm else '分片检视'}完成：模型输出 "
             f"{len(discovery.output.findings)} 条，{len(discovered)} 条通过新增行定位校验",
         )
         result.findings = discovered
-        if chunk.direct_llm or not self.settings.codex_verification_enabled:
-            return result
-
-        # ---------- 可选：证据复核轮
-        stage = f"codex.verify.{index}"
-        self._event(task.id, stage, "started", f"开始第 {index}/{total} 个分片的证据门禁与漏项复核")
-        try:
-            verified = self._run_codex(
-                task, worktree, build_verification_prompt(task, chunk.diff, discovered), stage, f"verify-{index}", route
-            )
-        except CodexError as exc:
-            # 复核失败时保留发现轮的合法意见，并标注需要作者确认
-            result.findings, result.unverified = merge_verification(discovered, [])
-            self._event(task.id, stage, "warning", f"证据复核执行失败，保留 {result.unverified} 条候选并请用户确认", str(exc))
-            return result
-        result.add_run(f"verify-{index}", verified)
-        result.summary = verified.output.summary.strip() or result.summary
-        confirmed = self._validate(result, verified.output.findings, chunk.diff)
-        result.findings, result.unverified = merge_verification(discovered, confirmed)
-        self._event(
-            task.id, stage, "completed",
-            f"证据复核完成：复核输出 {len(confirmed)} 条，待用户确认 {result.unverified} 条",
-        )
         return result
 
     @staticmethod
@@ -306,13 +294,23 @@ class ReviewService:
     # ================================================================ MR 整体评价
 
     def _queue_evaluation(self, task_id: str, route: ModelRoute | None) -> None:
-        """只在 MR 首次打开（action=open）时发表整体评价；后续 update 不重复评价。"""
+        """生成整体评价。
+
+        CodeHub MR 只在首次打开（action=open）时评价并回写，后续 update 不重复评价；
+        本地提交每次都评价，结果只保存在平台。
+        """
         task = self.database.get_task(task_id)
-        if task is None or task.action != "open":
+        local = task is not None and task.origin == ORIGIN_LOCAL
+        if task is None or (task.action != "open" and not local):
             return
         findings = self.database.list_findings(task_id)
         content = build_content(task, findings, self._evaluation_summary(task, findings, route))
-        self.database.queue_evaluation(task_id, level=rate_mr_quality(findings), content=content)
+        level = rate_mr_quality(findings)
+        if local:
+            self.database.queue_evaluation(task_id, level=level, content=content, status=ORIGIN_LOCAL)
+            self._event(task_id, "evaluation", "completed", f"整体评价已生成（{len(findings)} 条意见）")
+            return
+        self.database.queue_evaluation(task_id, level=level, content=content)
         self.publisher.enqueue_evaluation(task_id)
         self._event(task_id, "evaluation", "pending", f"MR 整体评价已进入发送队列（{len(findings)} 条意见）")
 
@@ -323,13 +321,7 @@ class ReviewService:
         if not gateway.configured or not model:
             return None
         try:
-            result = chat.complete(
-                gateway,
-                model,
-                build_evaluation_prompt(task, findings),
-                timeout=self.settings.openai_timeout_seconds,
-                max_attempts=self.settings.openai_max_attempts,
-            )
+            result = chat.complete(gateway, model, build_evaluation_prompt(task, findings))
         except chat.ChatError as exc:
             LOGGER.warning("[task=%s] evaluation summary failed, using template: %s", task.id, exc)
             return None

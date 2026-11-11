@@ -23,6 +23,8 @@ from .storage import Database
 
 LOGGER = logging.getLogger(__name__)
 SCHEDULER_INTERVAL_SECONDS = 30.0
+# 同时执行的检视任务数（每个任务内部的模型调用并发由模型路由控制）
+REVIEW_WORKERS = 5
 
 
 class ReviewRuntime:
@@ -67,21 +69,21 @@ class ReviewRuntime:
         self.publisher.start()
         self._threads = [
             threading.Thread(target=self._work, name=f"review-worker-{index}", daemon=True)
-            for index in range(self.settings.max_review_concurrency)
+            for index in range(REVIEW_WORKERS)
         ]
         self._threads.append(threading.Thread(target=self._schedule, name="review-scheduler", daemon=True))
         for thread in self._threads:
             thread.start()
         LOGGER.info(
             "runtime started workers=%s recovered_reviews=%s pending_publish=%s",
-            self.settings.max_review_concurrency, len(recovered), self.publisher.size(),
+            REVIEW_WORKERS, len(recovered), self.publisher.size(),
         )
 
     def stop(self, timeout: float = 15.0) -> None:
         if not self._threads:
             return
         self._stop.set()
-        for _ in range(self.settings.max_review_concurrency):
+        for _ in range(REVIEW_WORKERS):
             self._queue.put(None)
         for thread in self._threads:
             thread.join(timeout=timeout)

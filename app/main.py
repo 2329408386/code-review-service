@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import auth, reviews, settings as settings_api, stats, webhooks
+from .api import auth, local, reviews, settings as settings_api, stats, webhooks
 from .api.deps import AdminTokens
 from .config import Settings, get_settings
 from .logging_config import configure_logging
@@ -36,7 +36,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        LOGGER.info("application startup env=%s data_dir=%s", settings.app_env, settings.data_dir)
+        LOGGER.info("application startup data_dir=%s", settings.data_dir)
+        if not settings.admin_enabled:
+            LOGGER.warning("ADMIN_USERNAME / ADMIN_PASSWORD 未配置：控制台为只读模式")
         if start_workers:
             runtime.start()
         try:
@@ -48,7 +50,7 @@ def create_app(
 
     app = FastAPI(title="XKL 代码检视平台", version="1.0.0", lifespan=lifespan)
     app.state.runtime = runtime
-    app.state.admin_tokens = AdminTokens(settings.admin_token_ttl_seconds)
+    app.state.admin_tokens = AdminTokens()
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
@@ -72,7 +74,7 @@ def create_app(
         )
         return response
 
-    for module in (auth, webhooks, reviews, settings_api, stats):
+    for module in (auth, webhooks, local, reviews, settings_api, stats):
         app.include_router(module.router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

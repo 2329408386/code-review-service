@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import subprocess
 from pathlib import Path
@@ -84,10 +85,13 @@ def feature_repo(tmp_path: Path) -> tuple[Path, str, str]:
 # ---------------------------------------------------------------- 伪造 Codex CLI
 
 
-def fake_codex(directory: Path, outputs: list[dict | str], *, exit_code: int = 0, usage: tuple = (100, 20, 5)) -> Path:
+def fake_codex(
+    directory: Path, outputs: list[dict | str], *, monkeypatch=None, exit_code: int = 0, usage: tuple = (100, 20, 5)
+) -> Path:
     """生成一个伪 codex 可执行文件：按调用次数依次输出 outputs 中的结论，并打印 JSONL 事件。
 
     第 N 次调用使用 outputs[min(N, len-1)]；调用参数追加写入 calls.jsonl 便于断言。
+    传入 monkeypatch 时把 directory 放到 PATH 最前面，使 CodexClient 找到这个伪命令。
     """
     directory.mkdir(parents=True, exist_ok=True)
     payloads = [item if isinstance(item, str) else json.dumps(item, ensure_ascii=False) for item in outputs]
@@ -115,6 +119,8 @@ if {exit_code}:
 """
     )
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    if monkeypatch is not None:
+        monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
     return script
 
 

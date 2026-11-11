@@ -5,8 +5,8 @@
 
 默认依次读取 .env.example 与 .env.local（后者已 gitignore，存放 OPENAI_API_KEY 等密钥，覆盖前者）。
 
-脚本会创建一个含明显缺陷的临时 Git 仓库，模拟 CodeHub Webhook 触发检视，
-等待任务完成后打印检视意见与 MR 评价。评论回写需要 CodeHub 凭据，未配置时会记录为失败，属预期。
+脚本会创建一个含明显缺陷的临时 Git 仓库，通过“本地提交检视”接口提交最新一次提交，
+等待任务完成后打印检视意见与整体评价（本地提交只在平台展示，不回写 CodeHub）。
 """
 from __future__ import annotations
 
@@ -53,40 +53,34 @@ def main() -> None:
     (repo / "utils.py").write_text(BASE)
     git(repo, "add", ".")
     git(repo, "commit", "-m", "base")
-    target_sha = git(repo, "rev-parse", "HEAD")
     git(repo, "checkout", "-b", "feature/demo")
     (repo / "utils.py").write_text(CHANGED)
     git(repo, "commit", "-am", "add helpers")
     source_sha = git(repo, "rev-parse", "HEAD")
 
-    keep = ("openai_api_base_url", "openai_api_key", "openai_model", "codex_command", "openai_timeout_seconds")
+    keep = ("openai_api_base_url", "openai_api_key", "openai_model")
     settings = Settings(
         _env_file=None,
         data_dir=work / "data",
         log_dir=work / "log",
-        allow_local_repository_paths=True,
-        skip_source_branches="",
-        codex_timeout_seconds=900,
-        large_review_chunk_threshold=100,
+        admin_username="e2e",
+        admin_password="e2e",
         **{key: env[key] for key in keep if key in env},
     )
-    payload = {
-        "project": {"id": 1},
-        "object_attributes": {
-            "iid": 1, "state": "opened", "action": "open", "title": "新增工具函数",
-            "source_branch": "feature/demo", "target_branch": "main",
-            "last_commit": {"id": source_sha}, "target_branch_commit": {"id": target_sha},
-            "source": {"git_ssh_url": str(repo)}, "author": {"name": "e2e"},
-        },
-    }
     with TestClient(create_app(settings)) as client:
-        response = client.post("/api/webhooks/codehub", json=payload)
-        print("webhook:", response.status_code, response.json())
+        # TestClient 不是本机回环地址，用管理员身份提交本地检视（与 post-commit 钩子走同一接口）
+        token = client.post("/api/auth/login", json={"username": "e2e", "password": "e2e"}).json()["token"]
+        response = client.post(
+            "/api/local-reviews", json={"path": str(repo), "sha": source_sha},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        print("submit:", response.status_code, response.json())
         task_id = response.json()["task_id"]
         deadline = time.time() + 900
         while time.time() < deadline:
             task = client.get(f"/api/reviews/{task_id}").json()["task"]
-            if task["status"] in {"success", "failed", "ignored"}:
+            # 整体评价在任务成功后才生成，需一并等待
+            if task["status"] in {"failed", "ignored"} or (task["status"] == "success" and task["evaluation_status"]):
                 break
             time.sleep(3)
         detail = client.get(f"/api/reviews/{task_id}").json()

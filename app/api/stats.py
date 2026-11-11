@@ -18,16 +18,13 @@ def health(runtime: Runtime) -> dict:
     except Exception:
         LOGGER.exception("health check: database unavailable")
         db_ok = False
-    settings = runtime.settings
     route = runtime.registry.route_for("")
     return {
         "status": "ok" if db_ok else "degraded",
         "db_ok": db_ok,
         "queue_size": runtime.queue_size(),
         "active_reviews": runtime.active_reviews(),
-        "max_concurrency": settings.max_review_concurrency,
         "active_codex_runs": runtime.codex.active_runs(),
-        "max_codex_concurrency": settings.max_codex_concurrency,
         "publish_queue_size": runtime.publisher.size(),
         "publisher_alive": runtime.publisher.is_alive(),
         "codex_installed": runtime.codex.available,
@@ -37,7 +34,6 @@ def health(runtime: Runtime) -> dict:
         "codehub_configured": runtime.codehub.configured,
         "configured_models": runtime.registry.model_names(),
         "default_model": route.name if route else None,
-        "codex_verification_enabled": settings.codex_verification_enabled,
     }
 
 

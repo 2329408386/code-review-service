@@ -19,7 +19,8 @@
   const STATUS_CHIPS_KEY = "review_status_filters";
   const STATUS_LABELS = { pending: "排队中", running: "检视中", success: "已完成", failed: "失败", ignored: "已忽略" };
   const SEVERITY_LABELS = { major: "严重", minor: "一般", suggestion: "建议" };
-  const COMMENT_LABELS = { pending: "待回写", sent: "已回写", failed: "回写失败", skipped: "已跳过" };
+  const COMMENT_LABELS = { pending: "待回写", sent: "已回写", failed: "回写失败", skipped: "已跳过", local: "仅平台展示" };
+  const EVALUATION_LABELS = { pending: "待发送", sent: "已发送", failed: "发送失败", local: "仅平台展示" };
   const REPLY_SEGMENTS = [
     { key: "resolved", label: "已解决", color: "var(--success)" },
     { key: "no_problem", label: "没问题", color: "var(--info)" },
@@ -81,6 +82,18 @@
       throw error;
     }
     return data;
+  }
+
+  /** 任务编号：MR 显示 !iid，本地提交显示短提交号。 */
+  function taskRef(task) {
+    return task.origin === "local" ? task.source_sha.slice(0, 8) : `!${task.mr_iid}`;
+  }
+
+  /** 分支信息：MR 显示 源 → 目标，本地提交显示所在分支。 */
+  function branchText(task) {
+    return task.origin === "local"
+      ? `${escapeHtml(task.source_branch)} · 本地提交`
+      : `${escapeHtml(task.source_branch)} → ${escapeHtml(task.target_branch)}`;
   }
 
   function statusBadge(status) {
@@ -296,9 +309,9 @@
     return `<div class="review-row${selected}" data-id="${escapeHtml(task.id)}" tabindex="0" role="button">
       ${statusBadge(task.status)}
       <div class="row-main">
-        <div class="row-title"><span class="repo">${escapeHtml(task.repository_name)}</span><span class="mono">!${task.mr_iid}</span><span class="title">${escapeHtml(task.title || "（无标题）")}</span></div>
+        <div class="row-title"><span class="repo">${escapeHtml(task.repository_name)}</span><span class="mono">${taskRef(task)}</span><span class="title">${escapeHtml(task.title || "（无标题）")}</span></div>
         <div class="row-meta">
-          <span class="branch">${escapeHtml(task.source_branch)} → ${escapeHtml(task.target_branch)}</span>
+          <span class="branch">${branchText(task)}</span>
           <span>${escapeHtml(task.author || "未知提交人")}</span>
           <span>${formatTime(task.created_at)}</span>
           ${scheduled}
@@ -478,8 +491,8 @@
     const task = drawer.task;
     if (!task) return;
     const link = task.mr_url ? `<a href="${escapeHtml(task.mr_url)}" target="_blank" rel="noopener">在 CodeHub 中打开 ↗</a>` : "";
-    $("drawer-title").innerHTML = `<h2>${escapeHtml(task.repository_name)} !${task.mr_iid} · ${escapeHtml(task.title || "（无标题）")}</h2>
-      <div class="sub">${statusBadge(task.status)}<span class="mono">${escapeHtml(task.source_branch)} → ${escapeHtml(task.target_branch)}</span><span>${escapeHtml(task.author)}</span>${link}</div>`;
+    $("drawer-title").innerHTML = `<h2>${escapeHtml(task.repository_name)} ${taskRef(task)} · ${escapeHtml(task.title || "（无标题）")}</h2>
+      <div class="sub">${statusBadge(task.status)}<span class="mono">${branchText(task)}</span><span>${escapeHtml(task.author)}</span>${link}</div>`;
     $("tab-findings-count").textContent = drawer.findings.length;
     document.querySelectorAll(".tabs button").forEach((button) => button.classList.toggle("active", button.dataset.tab === drawer.tab));
     if (drawer.tab === "overview") renderOverview();
@@ -490,7 +503,7 @@
   function renderOverview() {
     const task = drawer.task;
     const evaluation = task.evaluation_status
-      ? `${task.evaluation_level ? `等级 ${task.evaluation_level} · ` : ""}${{ pending: "待发送", sent: "已发送", failed: "发送失败" }[task.evaluation_status] || task.evaluation_status}`
+      ? `${task.evaluation_level ? `等级 ${task.evaluation_level} · ` : ""}${EVALUATION_LABELS[task.evaluation_status] || task.evaluation_status}`
       : "—";
     const items = [
       ["任务 ID", `<span class="mono">${escapeHtml(task.id)}</span>`],
@@ -507,14 +520,14 @@
       ["Token 输入 / 输出", `${formatNumber(task.token_input)} / ${formatNumber(task.token_output)}`],
       ["源提交", `<span class="mono">${escapeHtml((task.source_sha || "").slice(0, 12))}</span>`],
       ["目标提交", `<span class="mono">${escapeHtml((task.target_sha || "—").slice(0, 12))}</span>`],
-      ["MR 评价", escapeHtml(evaluation)],
+      ["整体评价", escapeHtml(evaluation)],
     ];
     const sections = [];
     if (task.error_message) sections.push(`<div class="error-box">${escapeHtml(task.error_message)}</div>`);
     if (task.ignored_reason) sections.push(`<p class="notice">已忽略：${escapeHtml(task.ignored_reason)}</p>`);
     sections.push(`<dl class="info-grid">${items.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>`);
     if (task.review_summary) sections.push(`<div class="section"><h3>检视总结</h3><p class="prose">${escapeHtml(task.review_summary)}</p></div>`);
-    if (task.evaluation_content) sections.push(`<div class="section"><h3>MR 评价内容</h3><p class="prose">${escapeHtml(task.evaluation_content)}</p></div>`);
+    if (task.evaluation_content) sections.push(`<div class="section"><h3>整体评价</h3><p class="prose">${escapeHtml(task.evaluation_content)}</p></div>`);
     if (task.evaluation_error) sections.push(`<div class="error-box">评价发送失败：${escapeHtml(task.evaluation_error)}</div>`);
     if (task.description) sections.push(`<div class="section"><h3>MR 描述</h3><p class="prose">${escapeHtml(task.description)}</p></div>`);
     $("drawer-body").innerHTML = sections.join("");
@@ -703,7 +716,7 @@
     $("token-rows").innerHTML = data.items.length
       ? data.items.map((task) => `<tr>
           <td>${formatTime(task.created_at)}</td>
-          <td>${escapeHtml(task.repository_name)} !${task.mr_iid}</td>
+          <td>${escapeHtml(task.repository_name)} ${taskRef(task)}</td>
           <td class="title" title="${escapeHtml(task.title)}">${escapeHtml(task.title)}</td>
           <td class="num">${formatNumber(task.token_input)}</td>
           <td class="num">${formatNumber(task.token_output)}</td>

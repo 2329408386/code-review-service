@@ -125,13 +125,12 @@ def test_publisher_sends_with_rate_limit(settings, database):
         publisher.process(COMMENT, finding_id)
     assert [f.status for f in database.list_findings(task.id)] == ["sent", "sent"]
     assert database.list_findings(task.id)[0].discussion_id == f"disc-{ids[0]}"
-    assert clock.sleeps == [5.0]  # 两次请求间隔至少 5 秒
+    assert clock.sleeps == [pytest.approx(5.1)]  # 两次请求间隔至少 5 秒
     publisher.process(COMMENT, ids[0])  # 已发送的不再重复发送
     assert len(client.calls) == 2
 
 
 def test_publisher_retries_and_fails(settings, database):
-    settings.comment_retry_interval_seconds = 1
     task = create_task(database)
     [finding_id] = database.complete_review(task.id, [candidate()], stats={})
     retryable = CodeHubError("x", kind="server_error", retryable=True)

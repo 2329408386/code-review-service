@@ -14,12 +14,8 @@ def settings(tmp_path: Path) -> Settings:
         _env_file=None,
         data_dir=tmp_path / "data",
         log_dir=tmp_path / "log",
-        codehub_private_token="",
-        codehub_app_code="",
-        comment_rate_interval_seconds=5.0,
-        codex_timeout_seconds=5.0,
-        git_command_timeout_seconds=10.0,
-        allow_local_repository_paths=True,
+        admin_username="admin",
+        admin_password="secret",
     )
     value.ensure_directories()
     return value

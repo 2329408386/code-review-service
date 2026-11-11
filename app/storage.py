@@ -20,6 +20,9 @@ from .models import FindingCandidate, FindingRecord, ReviewEvent, ReviewTask
 from .review.findings import normalize_title
 
 REPLY_CATEGORIES = ("resolved", "no_risk", "no_problem", "other")
+# 任务来源：CodeHub MR（结果回写 CodeHub）/ 本地提交（结果只在平台展示）
+ORIGIN_CODEHUB = "codehub"
+ORIGIN_LOCAL = "local"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS review_tasks (
@@ -35,6 +38,7 @@ CREATE TABLE IF NOT EXISTS review_tasks (
     old_source_sha TEXT,
     target_sha TEXT,
     action TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'codehub',
     title TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     author TEXT NOT NULL DEFAULT '',
@@ -152,6 +156,7 @@ _TASK_MIGRATIONS = {
     "evaluation_error": "TEXT",
     "evaluation_retry_count": "INTEGER NOT NULL DEFAULT 0",
     "evaluation_sent_at": "TEXT",
+    "origin": "TEXT NOT NULL DEFAULT 'codehub'",
 }
 
 # 创建任务时由调用方提供的字段
@@ -172,6 +177,7 @@ TASK_INPUT_FIELDS = (
     "author",
     "assignee_id",
     "mr_url",
+    "origin",
 )
 
 # 去重：同一 MR 的同一提交已有进行中或成功的任务时不再重复检视
@@ -318,6 +324,7 @@ class Database:
         values = {name: fields.get(name) for name in TASK_INPUT_FIELDS}
         for name in ("title", "description", "author", "mr_url"):
             values[name] = values[name] or ""
+        values["origin"] = values["origin"] or ORIGIN_CODEHUB
         columns = ["id", *TASK_INPUT_FIELDS, "created_at", "status", "ignored_reason"]
         connection.execute(
             f"INSERT INTO review_tasks ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
@@ -548,6 +555,7 @@ class Database:
         findings: list[FindingCandidate],
         *,
         stats: dict[str, Any],
+        comment_status: str = "pending",
     ) -> list[int]:
         """原子地写入意见并把任务置为 success，返回新意见 ID。
 
@@ -564,7 +572,7 @@ class Database:
                 for finding in findings:
                     cursor = connection.execute(
                         "INSERT INTO findings (review_task_id, new_path, old_path, new_line, severity, title, body, "
-                        "status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                        "status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             task_id,
                             finding.new_path,
@@ -573,6 +581,7 @@ class Database:
                             finding.severity,
                             finding.title.strip(),
                             finding.body.strip(),
+                            comment_status,
                             _now(),
                         ),
                     )
@@ -646,10 +655,10 @@ class Database:
 
     # ------------------------------------------------------------------ MR 整体评价
 
-    def queue_evaluation(self, task_id: str, *, level: int, content: str) -> None:
+    def queue_evaluation(self, task_id: str, *, level: int, content: str, status: str = "pending") -> None:
         self._update_task(
             task_id,
-            evaluation_status="pending",
+            evaluation_status=status,
             evaluation_level=level,
             evaluation_content=content[:2000],
             evaluation_error=None,

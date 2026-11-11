@@ -59,3 +59,9 @@ def test_styles_support_dark_mode_and_mobile():
     assert "@media (max-width: 820px)" in CSS
     for status in ("pending", "running", "success", "failed", "ignored"):
         assert f".status-{status}" in CSS
+
+
+def test_local_commit_display():
+    # 本地提交显示短提交号与“仅平台展示”，不显示 MR 编号
+    assert 'task.origin === "local"' in JS
+    assert 'local: "仅平台展示"' in JS

@@ -4,14 +4,14 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
-from helpers import codex_calls, create_task, fake_codex, feature_repo
+from helpers import create_task, fake_codex, feature_repo
 
 from app.llm import chat
+from app.llm import codex as codex_module
 from app.llm.codex import CodexClient
 from app.llm.registry import ModelRegistry
 from app.review import service as service_module
 from app.review.codegraph import CodeGraphIndexer
-from app.review.findings import UNVERIFIED_CONFIRMATION
 from app.review.git import RepositoryManager
 from app.review.service import ReviewService
 
@@ -32,12 +32,11 @@ class RecordingPublisher:
 
 
 @pytest.fixture
-def env(settings, database, tmp_path):
+def env(settings, database, tmp_path, monkeypatch):
     repo, target, source = feature_repo(tmp_path)
-    settings.large_review_chunk_threshold = 100
 
     def build(outputs, **codex_kwargs):
-        settings.codex_command = str(fake_codex(tmp_path / "bin", outputs, **codex_kwargs))
+        fake_codex(tmp_path / "bin", outputs, monkeypatch=monkeypatch, **codex_kwargs)
         registry = ModelRegistry(database, settings)
         publisher = RecordingPublisher()
         service = ReviewService(
@@ -45,8 +44,13 @@ def env(settings, database, tmp_path):
             codex=CodexClient(settings, registry), registry=registry,
             codegraph=CodeGraphIndexer(settings), publisher=publisher,
         )
-        task = create_task(database, repository_url=str(repo), source_sha=source, target_sha=target)
+        task = create_task(
+            database, repository_url=str(repo), source_sha=source, target_sha=target, **task_overrides
+        )
         return service, task, publisher
+
+    task_overrides: dict = {}
+    build.task_overrides = task_overrides
 
     return build
 
@@ -79,31 +83,32 @@ def test_update_action_skips_evaluation_and_rerun_guard(env, database):
     assert database.get_task(task.id).status == "success"
 
 
-def test_codex_failure_marks_failed(env, database, settings):
+def test_codex_failure_marks_failed(env, database, settings, monkeypatch):
+    monkeypatch.setattr(codex_module, "MAX_ATTEMPTS", 1)
     service, task, _ = env(["not json"])
-    settings.codex_max_attempts = 1
     service.process(task)
     stored = database.get_task(task.id)
     assert stored.status == "failed" and "no valid structured result" in stored.error_message
     assert not list(settings.worktrees_dir.iterdir())
 
 
-def test_verification_pass_marks_unverified(env, database, settings, tmp_path):
-    second = {**FINDING, "new_line": 2, "title": "未初始化"}
-    # 发现轮两条，复核轮只确认第一条
-    service, task, _ = env([{"summary": "", "findings": [FINDING, second]}, {"summary": "复核", "findings": [FINDING]}])
-    settings.codex_verification_enabled = True
+def test_local_commit_is_platform_only(env, database):
+    env.task_overrides.update(origin="local", action="commit", project_id=0, mr_iid=0)
+    service, task, publisher = env([{"summary": "", "findings": [FINDING]}])
     service.process(task)
-    findings = {f.new_line: f for f in database.list_findings(task.id)}
-    assert set(findings) == {2, 3}
-    assert findings[2].body.endswith(UNVERIFIED_CONFIRMATION)
-    assert database.get_task(task.id).review_pass_count == 2
-    assert len(codex_calls(tmp_path / "bin")) == 2
+    stored = database.get_task(task.id)
+    assert stored.status == "success" and stored.origin == "local"
+    # 意见与评价只保存在平台，不进入 CodeHub 发送队列，重启后也不会被恢复发送
+    assert publisher.comments == [] and publisher.evaluations == []
+    assert [f.status for f in database.list_findings(task.id)] == ["local"]
+    assert database.pending_comment_finding_ids() == []
+    assert stored.evaluation_status == "local" and "总体评价" in stored.evaluation_content
+    assert database.pending_evaluation_task_ids() == []
 
 
-def test_large_review_is_deferred_then_runs(env, database, settings, monkeypatch):
+def test_large_review_is_deferred_then_runs(env, database, monkeypatch):
     service, task, _ = env([{"summary": "", "findings": []}])
-    settings.large_review_chunk_threshold = 0  # 任何分片数都算大任务
+    monkeypatch.setattr(service_module, "DEFER_CHUNK_THRESHOLD", 0)  # 任何分片数都算大任务
 
     class Morning(datetime):
         @classmethod
@@ -122,10 +127,10 @@ def test_large_review_is_deferred_then_runs(env, database, settings, monkeypatch
     assert database.get_task(task.id).status == "success"
 
 
-def test_too_many_chunks_ignored(env, database, settings):
+def test_too_many_chunks_ignored(env, database, monkeypatch):
     service, task, _ = env([{"summary": "", "findings": []}])
-    settings.max_review_chunks = 1
-    settings.max_prompt_diff_bytes = 10_000
+    monkeypatch.setattr(service_module, "MAX_CHUNKS", 1)
+    monkeypatch.setattr(service_module, "MAX_CHUNK_BYTES", 10_000)
     service.repositories.build_diff = _fake_many_chunks(service.repositories.build_diff)
     service.process(task)
     stored = database.get_task(task.id)

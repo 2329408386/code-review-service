@@ -20,6 +20,8 @@ LOGGER = logging.getLogger(__name__)
 SETTING_KEY = "codex_models"
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 _NAME_CHARS = "._:/-"
+# 未指定并发度时，每条路由同时运行的 Codex 进程数
+DEFAULT_CONCURRENCY = 5
 
 
 class ModelConfigurationError(ValueError):
@@ -96,7 +98,7 @@ class ModelRegistry:
                 LOGGER.warning("stored model routes are invalid and were ignored: %s", exc)
         # 首次启动：用 .env 的 OPENAI_MODEL 生成一条兜底路由（网关沿用 .env 默认网关）
         if self.settings.openai_model:
-            seed = [{"name": self.settings.openai_model, "concurrency": self.settings.max_codex_concurrency}]
+            seed = [{"name": self.settings.openai_model, "concurrency": DEFAULT_CONCURRENCY}]
             self._apply(*self._normalize(seed, None, {}))
             self._save()
 
@@ -131,7 +133,7 @@ class ModelRegistry:
             effort = item.get("reasoning_effort") or (old.reasoning_effort if old else "medium")
             if effort not in REASONING_EFFORTS:
                 raise ModelConfigurationError(f"思考强度必须是 {', '.join(REASONING_EFFORTS)} 之一")
-            concurrency = item.get("concurrency") or self.settings.max_codex_concurrency
+            concurrency = item.get("concurrency") or DEFAULT_CONCURRENCY
             if isinstance(concurrency, bool) or not isinstance(concurrency, int) or not 1 <= concurrency <= 100:
                 raise ModelConfigurationError("并发度必须是 1-100 的整数")
             base_url = (item.get("base_url") or "").strip()

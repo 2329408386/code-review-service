@@ -30,6 +30,12 @@ DEFAULT_MODEL_LABEL = "Codex 本机默认模型"
 # 注入给 Codex 子进程的网关密钥环境变量名
 GATEWAY_KEY_ENV = "CODE_REVIEW_LLM_API_KEY"
 MAX_OUTPUT_CHARS = 2_000_000
+COMMAND = "codex"
+TIMEOUT_SECONDS = 3600.0
+# 输出格式不合法时的总尝试次数（第二次会追加格式提示）
+MAX_ATTEMPTS = 2
+# 没有任何模型路由时（使用 Codex 本机默认模型）的并发上限
+FALLBACK_CONCURRENCY = 5
 # 不传给 Codex 子进程的环境变量（避免服务自身的凭据泄露给模型可执行的命令）
 _SECRET_MARKERS = (
     "TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY", "APP_CODE", "API_KEY", "ACCESS_KEY", "AUTH",
@@ -72,8 +78,8 @@ class CodexClient:
     def __init__(self, settings: Settings, registry: ModelRegistry):
         self.settings = settings
         self.registry = registry
-        self.command = shutil.which(settings.codex_command) or settings.codex_command
-        self._slots = threading.BoundedSemaphore(settings.max_codex_concurrency)
+        self.command = shutil.which(COMMAND) or COMMAND
+        self._fallback_slot = threading.BoundedSemaphore(FALLBACK_CONCURRENCY)
         self._active = 0
         self._active_lock = threading.Lock()
         self._prompt_log_lock = threading.Lock()
@@ -82,7 +88,7 @@ class CodexClient:
 
     @property
     def available(self) -> bool:
-        return bool(shutil.which(self.settings.codex_command)) or Path(self.command).exists()
+        return bool(shutil.which(self.command))
 
     @cached_property
     def version(self) -> str | None:
@@ -115,22 +121,18 @@ class CodexClient:
         log_identity: tuple[str, str],
         on_progress: Callable[[Progress], None] | None = None,
     ) -> CodexResult:
-        """在全局与模型路由两级并发槽位内执行一次检视（含格式错误重试）。"""
-        route_slot = self.registry.slot(route)
-        if route_slot:
-            route_slot.acquire()
-        try:
-            with self._slots:
+        """在模型路由的并发槽位内执行一次检视（含格式错误重试）。
+
+        并发只由模型路由的“并发度”控制；没有路由时使用固定的兜底上限。
+        """
+        with self.registry.slot(route) or self._fallback_slot:
+            with self._active_lock:
+                self._active += 1
+            try:
+                return self._run_with_retries(worktree, prompt, task_id, label, route, log_identity, on_progress)
+            finally:
                 with self._active_lock:
-                    self._active += 1
-                try:
-                    return self._run_with_retries(worktree, prompt, task_id, label, route, log_identity, on_progress)
-                finally:
-                    with self._active_lock:
-                        self._active -= 1
-        finally:
-            if route_slot:
-                route_slot.release()
+                    self._active -= 1
 
     # ---------------------------------------------------------------- 执行
 
@@ -169,11 +171,11 @@ class CodexClient:
         on_progress: Callable[[Progress], None] | None,
     ) -> CodexResult:
         if not self.available:
-            raise CodexError(f"Codex CLI not found: {self.settings.codex_command}")
+            raise CodexError(f"Codex CLI not found: {COMMAND}")
         model = route.name if route else DEFAULT_MODEL_LABEL
         totals = [0.0, 0, 0, 0]  # 耗时、输入、输出、缓存输入（失败的尝试也计入）
         last_error = CodexError("Codex did not run")
-        for attempt in range(1, self.settings.codex_max_attempts + 1):
+        for attempt in range(1, MAX_ATTEMPTS + 1):
             attempt_prompt = prompt if attempt == 1 else f"{prompt}\n\n{REVIEW_RETRY_HINT}"
             self._append_prompt_log(log_identity, task_id, label, attempt, attempt_prompt)
             log_prefix = self.settings.codex_log_dir / f"{task_id}.{_safe_filename(label)}.attempt-{attempt}"
@@ -277,7 +279,7 @@ class CodexClient:
         try:
             process.stdin.write(prompt)
             process.stdin.close()
-            return_code = process.wait(timeout=self.settings.codex_timeout_seconds)
+            return_code = process.wait(timeout=TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             timed_out = True
             self._kill(process)
@@ -297,7 +299,7 @@ class CodexClient:
         if output_path.exists():
             raw = output_path.read_text(encoding="utf-8", errors="replace")[:MAX_OUTPUT_CHARS]
         if timed_out:
-            raise CodexError(f"Codex timed out after {self.settings.codex_timeout_seconds}s", raw_output=raw)
+            raise CodexError(f"Codex timed out after {TIMEOUT_SECONDS:.0f}s", raw_output=raw)
         if return_code != 0:
             detail = stderr_text.strip()[-2000:] or "no stderr output"
             raise CodexError(f"Codex exited with code {return_code}: {detail}", raw_output=raw)

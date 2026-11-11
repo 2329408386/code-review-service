@@ -1,4 +1,4 @@
-"""检视意见的确定性质量门禁：定位校验、去重、复核结果合并。"""
+"""检视意见的确定性质量门禁：定位校验、去重。"""
 from __future__ import annotations
 
 import re
@@ -6,10 +6,6 @@ from dataclasses import dataclass
 
 from ..models import FindingCandidate
 from .diff import DEV_NULL, DiffFile, ParsedDiff, normalize_path
-
-# 复核轮未确认、但定位合法的意见，会在正文后追加此提示请作者确认
-UNVERIFIED_CONFIRMATION = "这一块需要确认一下？"
-
 
 @dataclass(frozen=True)
 class ValidationResult:
@@ -78,32 +74,3 @@ def deduplicate_findings(findings: list[FindingCandidate]) -> list[FindingCandid
             seen.add(key)
             result.append(finding)
     return result
-
-
-def merge_verification(
-    discovered: list[FindingCandidate], verified: list[FindingCandidate]
-) -> tuple[list[FindingCandidate], int]:
-    """合并复核结果：以复核意见为主，复核未确认的发现轮意见保留并追加“请确认”提示。
-
-    返回 (合并后的意见, 未确认数量)。同一行上发现轮与复核轮各只有一条时，视为复核改写了同一问题。
-    """
-    verified_keys = {finding_key(item) for item in verified}
-
-    def per_line(items: list[FindingCandidate]) -> dict[tuple[str, int], int]:
-        counts: dict[tuple[str, int], int] = {}
-        for item in items:
-            location = finding_key(item)[:2]
-            counts[location] = counts.get(location, 0) + 1
-        return counts
-
-    discovered_per_line, verified_per_line = per_line(discovered), per_line(verified)
-    suffix = f"；{UNVERIFIED_CONFIRMATION}"
-    unverified: list[FindingCandidate] = []
-    for item in discovered:
-        location = finding_key(item)[:2]
-        rewritten = discovered_per_line.get(location) == 1 and verified_per_line.get(location) == 1
-        if finding_key(item) in verified_keys or rewritten:
-            continue
-        body = item.body.rstrip().rstrip("。；;！!.,，")[: 8000 - len(suffix)]
-        unverified.append(item.model_copy(update={"body": body + suffix}))
-    return deduplicate_findings([*verified, *unverified]), len(unverified)

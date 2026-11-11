@@ -10,6 +10,7 @@ from ..config import Settings
 from ..models import FindingRecord, ReviewTask
 
 LOGGER = logging.getLogger(__name__)
+HTTP_TIMEOUT_SECONDS = 20.0
 
 
 class CodeHubError(RuntimeError):
@@ -28,7 +29,7 @@ class CodeHubError(RuntimeError):
 class CodeHubClient:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._http = httpx.Client(timeout=settings.comment_http_timeout_seconds)
+        self._http = httpx.Client(timeout=HTTP_TIMEOUT_SECONDS)
         self._user_id: int | None = None
         self._user_loaded = False
 
