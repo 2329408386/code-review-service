@@ -6,7 +6,7 @@ FastAPI 服务：接收 CodeHub MR webhook → 隔离 clone → 调用 Codex CLI
 - 启动（默认 8083 端口）：`./run.sh`（首次会自动创建 `.venv` 并安装依赖；`PORT=xxxx ./run.sh` 可改端口）
 - 测试：`.venv/bin/python -m pytest -q`（当前 76 个用例全部通过，改动后必须保持全绿）
 - 单个测试：`.venv/bin/python -m pytest -q tests/test_xxx.py -k name`
-- 端到端冒烟（真实 Codex + 大模型网关）：`.venv/bin/python tests/e2e_smoke.py`（读取 `.env.example`，再用已 gitignore 的 `.env.local` 覆盖密钥）
+- 端到端冒烟（真实 Codex + 大模型网关）：`.venv/bin/python tests/e2e_smoke.py`（读取 `.env.example`，再用 `.env` 覆盖密钥）
 - 健康检查：`curl -s localhost:8083/health`
 - 本地提交自动检视：`scripts/install-git-hook.sh [仓库路径]` 安装 post-commit 钩子，每次提交调用 `POST /api/local-reviews`（仅本机或管理员），结果只在平台展示
 
@@ -15,7 +15,7 @@ FastAPI 服务：接收 CodeHub MR webhook → 隔离 clone → 调用 Codex CLI
 - 超时、重试、并发、分片大小等调优参数是所在模块的大写常量（如 `review/service.py`、`llm/codex.py`、`codehub/publisher.py`），**不要再加回 Settings**；测试用 monkeypatch 修改。
 - Codex 并发只由模型路由的“并发度”控制；未配置管理员时控制台只读。
 - 大模型默认网关：`OPENAI_API_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL`。模型路由（控制台可改）可为每条路由单独配置网关，存于 SQLite `runtime_settings`。
-- 模板见 `.env.example`；`.env`、`.env.local` 含密钥，已被 gitignore，**不要把密钥写进 `.env.example`**。
+- 模板见 `.env.example`；`.env` 含密钥，已被 gitignore，**不要把密钥写进 `.env.example`**。
 - 运行时数据：`data/`（`reviews.db` SQLite、`repos/`、`worktrees/`、`codex-logs/`），日志：`log/`。均已 gitignore。
 
 ## 代码结构（app/）

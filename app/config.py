@@ -18,8 +18,7 @@ def _split_csv(value: str) -> list[str]:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        # .env.local（可选，同样已 gitignore）覆盖 .env 中的同名项，适合放本机私有配置
-        env_file=(".env", ".env.local"), env_file_encoding="utf-8", extra="ignore", case_sensitive=False
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", case_sensitive=False
     )
 
     # ---------- 大模型默认网关（OpenAI 兼容） ----------

@@ -3,7 +3,7 @@
 用法：
     .venv/bin/python tests/e2e_smoke.py [env 文件 ...]
 
-默认依次读取 .env.example 与 .env.local（后者已 gitignore，存放 OPENAI_API_KEY 等密钥，覆盖前者）。
+默认依次读取 .env.example 与 .env（后者已 gitignore，存放 OPENAI_API_KEY 等密钥，覆盖前者）。
 
 脚本会创建一个含明显缺陷的临时 Git 仓库，通过“本地提交检视”接口提交最新一次提交，
 等待任务完成后打印检视意见与整体评价（本地提交只在平台展示，不回写 CodeHub）。
@@ -39,7 +39,7 @@ def git(repo: Path, *args: str) -> str:
 
 
 def main() -> None:
-    env_files = [Path(arg) for arg in sys.argv[1:]] or [ROOT / ".env.example", ROOT / ".env.local"]
+    env_files = [Path(arg) for arg in sys.argv[1:]] or [ROOT / ".env.example", ROOT / ".env"]
     env: dict[str, str] = {}
     for env_file in env_files:
         if env_file.exists():

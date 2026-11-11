@@ -8,9 +8,6 @@
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)"
-    ],
-    "deny": [
-      "Read(./.env)"
     ]
   }
 }
