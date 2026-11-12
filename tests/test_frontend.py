@@ -112,3 +112,4 @@ def test_help_page_renders_docs():
     # 使用说明页：读取 /api/docs，前端自带 Markdown 渲染（内网不依赖 CDN），内容先转义再加格式
     assert '"/api/docs"' in JS and "function renderMarkdown" in JS
     assert "escapeHtml(part)" in JS
+    assert "/api/docs/images/" in JS and ".doc-img" in CSS  # 文档截图

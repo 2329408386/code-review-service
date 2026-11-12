@@ -1591,6 +1591,9 @@
     return text.split(/(`[^`]+`)/).map((part) => {
       if (/^`[^`]+`$/.test(part)) return `<code>${escapeHtml(part.slice(1, -1))}</code>`;
       return escapeHtml(part)
+        // 文档截图：只允许 docs/images 下的文件，点击在新窗口查看原图
+        .replace(/!\[([^\]]*)\]\(images\/([\w-]+\.(?:png|jpe?g|webp|gif))\)/g,
+          '<a class="doc-img" href="/api/docs/images/$2" target="_blank" rel="noopener"><img src="/api/docs/images/$2" alt="$1" loading="lazy" /></a>')
         .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
         .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
         .replace(/&lt;(https?:\/\/[^\s&]+)&gt;/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
@@ -1657,7 +1660,10 @@
       const para = [];
       for (; i < lines.length && lines[i].trim() && !/^(#{1,4}\s|>|```|\||\s*([-*]|\d+\.)\s|-{3,}\s*$)/.test(lines[i]); i += 1) para.push(lines[i].trim());
       if (!para.length) { out.push(`<p>${mdInline(line)}</p>`); i += 1; continue; }
-      out.push(`<p>${mdInline(para.join(" "))}</p>`);
+      const image = para.length === 1 && para[0].match(/^!\[([^\]]*)\]\([^)]+\)$/);
+      out.push(image
+        ? `<figure>${mdInline(para[0])}${image[1] ? `<figcaption>${escapeHtml(image[1])}</figcaption>` : ""}</figure>`
+        : `<p>${mdInline(para.join(" "))}</p>`);
     }
     return { html: out.join("\n"), toc };
   }

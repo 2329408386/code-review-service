@@ -461,6 +461,11 @@ tr.is-hidden .repo-name { text-decoration: line-through; text-decoration-color: 
 .doc .table td, .doc .table th { white-space: normal; line-height: 1.6; }
 .doc .table td code { white-space: normal; }
 .doc .table td strong { white-space: nowrap; }
+.doc figure { margin: 14px 0 18px; }
+.doc-img { display: block; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
+.doc-img img { display: block; width: 100%; height: auto; }
+.doc-img:hover { border-color: var(--primary); }
+.doc figcaption { margin-top: 6px; text-align: center; color: var(--text-3); font-size: 12px; }
 
 /* ============ 详情抽屉 ============ */
 .drawer-mask { position: fixed; inset: 0; background: rgba(15, 18, 30, 0.32); z-index: 40; }

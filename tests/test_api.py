@@ -277,6 +277,17 @@ def test_docs_endpoints(client):
     assert "codehub-note" in onboarding["markdown"] and "检视意见分类" in onboarding["markdown"]
     assert "李程鹏" in client.get("/api/docs/guide").json()["markdown"]
     assert client.get("/api/docs/..%2F.env").status_code == 404  # 只允许白名单文档
+    # 使用说明中引用的截图都存在且可访问；文件名做白名单校验
+    import re
+
+    guide = client.get("/api/docs/guide").json()["markdown"]
+    images = re.findall(r"\]\(images/([\w-]+\.png)\)", guide)
+    assert len(images) >= 5
+    for name in images:
+        response = client.get(f"/api/docs/images/{name}")
+        assert response.status_code == 200 and response.headers["content-type"] == "image/png", name
+    assert client.get("/api/docs/images/..%2F接入指南.md").status_code == 404
+    assert client.get("/api/docs/images/missing.png").status_code == 404
 
 
 def test_health_tokens_and_index(client, runtime):
