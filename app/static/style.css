@@ -167,7 +167,8 @@ input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px 
 .health.ok .dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
 .health.bad .dot { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
 
-.main { flex: 1; min-width: 0; padding: 0 32px 40px; }
+.main { flex: 1; min-width: 0; padding: 0 32px 24px; display: flex; flex-direction: column; min-height: 100vh; }
+.main > .page { margin-bottom: 40px; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0 18px; }
 .topbar h1 { font-size: 20px; letter-spacing: -0.01em; }
 .topbar-actions { display: flex; align-items: center; gap: 10px; }
@@ -267,6 +268,7 @@ input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px 
 .status-ignored { background: var(--neutral-soft); color: var(--text-3); }
 @keyframes pulse { 50% { opacity: 0.3; } }
 
+.page-footer { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); text-align: center; color: var(--text-3); font-size: 12px; }
 .empty { text-align: center; color: var(--text-3); padding: 48px; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 16px; color: var(--text-2); }
 
@@ -353,6 +355,17 @@ svg.viz { display: block; fill: none; stroke: none; stroke-width: 0; overflow: v
 /* ============ 代码仓管理 ============ */
 .group-manager { display: flex; flex-direction: column; gap: 10px; }
 .group-manager h3 { font-size: 13px; color: var(--text-2); font-weight: 500; }
+#group-list { display: flex; flex-direction: column; gap: 8px; }
+.group-row { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; background: var(--surface-2); }
+.group-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.group-name { display: inline-flex; align-items: center; font-weight: 600; min-width: 120px; }
+.group-ops { display: flex; gap: 6px; margin-left: auto; }
+.cred-badge { padding: 1px 8px; border-radius: 6px; font-size: 12px; background: var(--neutral-soft); color: var(--text-2); }
+.cred-badge.on { background: var(--success-soft); color: var(--success); }
+.cred-badge.pending { background: var(--warning-soft); color: var(--warning); }
+.cred-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 10px; }
+.cred-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-2); flex: 1 1 220px; }
+.cred-form .muted { flex-basis: 100%; margin: 0; font-size: 12px; }
 .tag.group-tag { font-family: inherit; font-size: 13px; padding: 4px 6px 4px 10px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
 .group-tag em { font-style: normal; color: var(--text-3); margin-left: 4px; font-variant-numeric: tabular-nums; }
 .group-tag .swatch { margin-right: 4px; }
@@ -482,6 +495,12 @@ tr.is-hidden .repo-name { text-decoration: line-through; text-decoration-color: 
 .step summary { display: flex; align-items: baseline; gap: 10px; cursor: pointer; list-style: none; }
 .step summary::-webkit-details-marker { display: none; }
 .step .step-label { font-weight: 500; }
+.step-no {
+  display: inline-grid; place-items: center; flex: none; min-width: 20px; height: 20px; padding: 0 5px;
+  border-radius: 999px; background: var(--primary); color: #fff; font-size: 11px; font-weight: 600;
+  font-variant-numeric: tabular-nums; align-self: center;
+}
+.step.numbered::before { background: var(--primary); }
 .step .step-preview { flex: 1; min-width: 0; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .step time { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
 .step pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--border); font-family: var(--mono); font-size: 12px; max-height: 360px; overflow: auto; }
@@ -515,7 +534,7 @@ tr.is-hidden .repo-name { text-decoration: line-through; text-decoration-color: 
   .brand small, .sidebar-foot { display: none; }
   .nav { flex-direction: row; }
   .nav a { padding: 7px 10px; white-space: nowrap; }
-  .main { padding: 0 16px 32px; }
+  .main { padding: 0 16px 20px; min-height: 0; }
   .kpis, .kpis-3 { grid-template-columns: 1fr; }
   .nav a.active::before { display: none; }
   .stats-period { margin-left: 0; width: 100%; }

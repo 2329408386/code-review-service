@@ -4,7 +4,7 @@ FastAPI 服务：接收 CodeHub MR webhook → 隔离 clone → 调用 Codex CLI
 
 ## 常用命令
 - 启动（默认 8083 端口）：`./run.sh`（首次会自动创建 `.venv` 并安装依赖；`PORT=xxxx ./run.sh` 可改端口）
-- 测试：`.venv/bin/python -m pytest -q`（当前 85 个用例全部通过，改动后必须保持全绿）
+- 测试：`.venv/bin/python -m pytest -q`（当前 89 个用例全部通过，改动后必须保持全绿）
 - 单个测试：`.venv/bin/python -m pytest -q tests/test_xxx.py -k name`
 - 端到端冒烟（真实 Codex + 大模型网关）：`.venv/bin/python tests/e2e_smoke.py`（读取 `.env.example`，再用 `.env` 覆盖密钥）
 - 健康检查：`curl -s localhost:8083/health`
@@ -19,6 +19,7 @@ FastAPI 服务：接收 CodeHub MR webhook → 隔离 clone → 调用 Codex CLI
 - 大模型默认网关：`OPENAI_API_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL`。模型路由（控制台可改）可为每条路由单独配置网关，存于 SQLite `runtime_settings`。
 - 模板见 `.env.example`；`.env` 含密钥，已被 gitignore，**不要把密钥写进 `.env.example`**。
 - 按模型统计依赖 SQLite `model_calls`（每次 Codex 调用含失败、整体评价调用各一行）与 `findings.model`；升级前的历史任务在首次启动时按 `models_used` 回填一次（多模型均分）。
+- CodeHub 凭据：默认取 `.env` 的 `CODEHUB_PRIVATE_TOKEN` / `CODEHUB_APP_CODE`；代码仓分组可在控制台配置独立凭据（存于 `runtime_settings` 的 `repository_catalog`，接口不回显），组内代码仓的评论、评价、自动解决都用分组凭据（`CodeHubClient.credentials_for`）。
 - 运行时数据：`data/`（`reviews.db` SQLite、`repos/`、`worktrees/`、`codex-logs/`），日志：`log/`。均已 gitignore。
 
 ## 代码结构（app/）
@@ -30,6 +31,9 @@ FastAPI 服务：接收 CodeHub MR webhook → 隔离 clone → 调用 Codex CLI
 - 任务 `origin`：`codehub`（MR，结果回写 CodeHub）/ `local`（本地提交，意见与评价状态为 `local`，不回写）
 - `llm/` — `registry.py`（模型路由与网关）、`codex.py`（Codex CLI 调用与重试）、`output.py`（输出 JSON 与事件流解析）、`chat.py`（OpenAI 兼容 /models、/chat/completions）
 - `codehub/` — `client.py`（CodeHub OpenAPI）、`publisher.py`（单线程限流回写评论与评价）、`evaluation.py`（MR 评分与评价文案）、`replies.py`（回复分类与自动解决）
+
+## 文档
+- `docs/接入指南.md`（CodeHub 回调配置、开通意见发表）与 `docs/使用说明.md`（平台普通用户使用说明，不含管理员操作）；平台功能变化时同步更新。
 
 ## 约定
 - 测试用 `tests/conftest.py` 的 `settings`/`database` fixture（tmp_path 隔离，`_env_file=None`）；公共构造工具在 `tests/helpers.py`（含伪造的 codex CLI）。

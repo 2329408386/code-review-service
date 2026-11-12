@@ -36,7 +36,7 @@ class ReviewRuntime:
         self.registry = ModelRegistry(self.database, settings)
         self.scope = ReviewScopeRegistry(self.database)
         self.catalog = RepositoryCatalog(self.database)
-        self.codehub = CodeHubClient(settings)
+        self.codehub = CodeHubClient(settings, resolver=self.catalog.codehub_credentials)
         self.publisher = Publisher(self.database, self.codehub, settings)
         self.codex = CodexClient(settings, self.registry)
         self.codegraph = CodeGraphIndexer(settings)

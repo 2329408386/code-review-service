@@ -70,6 +70,21 @@ def test_client_error_classification(settings):
         unconfigured.resolve_discussion(1, 1, "d")
 
 
+def test_group_credentials_override_default(settings):
+    from app.codehub.client import Credentials
+
+    client, requests = _client(settings, lambda r: httpx.Response(201, json={"id": 7}))
+    client.resolver = lambda repo: Credentials("group-token", "group-app") if repo == "core" else None
+    client.post_discussion(make_task(repository_name="core"), _finding())
+    client.post_evaluation(make_task(repository_name="other"))
+    client.resolve_discussion(1, 1, "d", "core")
+    assert [r.headers["private-token"] for r in requests] == ["group-token", "token", "group-token"]
+    assert requests[0].headers["X-Apig-AppCode"] == "group-app"
+    # 每套凭据各自查询一次所属用户
+    assert client.current_user_id("core") == 7 and client.current_user_id("other") == 7
+    assert client.current_user_id("core") == 7 and len(requests) == 5
+
+
 def test_current_user_cached(settings):
     client, requests = _client(settings, lambda r: httpx.Response(200, json={"id": 42}))
     assert client.current_user_id() == 42 and client.current_user_id() == 42

@@ -147,6 +147,12 @@ class ReviewScopeInput(BaseModel):
 class RepositoryGroupInput(BaseModel):
     name: str = Field(max_length=200)
     repositories: list[str] = Field(default_factory=list, max_length=1000)
+    # 重命名前的组名：用于保留已保存的 CodeHub 凭据
+    previous_name: str | None = Field(default=None, max_length=200)
+    # 分组独立的 CodeHub 凭据；留空保持不变，clear_codehub=True 改回 .env 默认凭据
+    codehub_private_token: str | None = Field(default=None, max_length=1000)
+    codehub_app_code: str | None = Field(default=None, max_length=1000)
+    clear_codehub: bool = False
 
 
 class RepositoryCatalogInput(BaseModel):

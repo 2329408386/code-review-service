@@ -35,7 +35,7 @@ def health(runtime: Runtime) -> dict:
         "codex_version": runtime.codex.version,
         "codegraph_enabled": runtime.codegraph.enabled,
         "codegraph_installed": runtime.codegraph.installed,
-        "codehub_configured": runtime.codehub.configured,
+        "codehub_configured": runtime.codehub.configured or runtime.catalog.has_codehub_credentials(),
         "configured_models": runtime.registry.model_names(),
         "default_model": route.name if route else None,
     }

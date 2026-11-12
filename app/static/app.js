@@ -6,7 +6,7 @@
  *   3. 页面路由（#reviews / #stats / #repos / #models / #scope）
  *   4. 检视记录列表 + 详情抽屉（概览 / 意见 / 推理过程，SSE 实时推送）
  *   5. 数据统计（SVG 图表：趋势、环形图、表内比例条）
- *   6. 代码仓管理（隐藏、分组）
+ *   6. 代码仓管理（隐藏、分组、分组独立的 CodeHub 凭据）
  *   7. 模型路由配置
  *   8. 检视范围配置
  */
@@ -37,6 +37,8 @@
     { key: "other", label: "其他", color: "var(--text-3)" },
   ];
   const SHARD_PATTERN = /^codex\.(discovery|verify|direct)\.(\d+)\.reasoning$/;
+  // 推理过程中需要编号的步骤（与后端 llm/output.py 的 _ITEM_LABELS 对应）
+  const NUMBERED_STEPS = new Set(["推理步骤", "推理摘要"]);
   const SHARD_LABELS = { discovery: "代码检视", verify: "证据复核", direct: "超大新增文件直检" };
 
   /** 转义 HTML，所有动态内容插入前都必须经过它。 */
@@ -644,12 +646,18 @@
       if (!shards.has(key)) shards.set(key, []);
       shards.get(key).push(event);
     }
-    const html = [...shards].map(([title, events]) => `<section class="shard"><h4 class="shard-title">${escapeHtml(title)}</h4>
-      ${events.map((event) => `<div class="step"><details>
-        <summary><span class="step-label">${escapeHtml(event.message)}</span><span class="step-preview">${escapeHtml((event.detail || "").slice(0, 120))}</span><time>${formatTime(event.created_at).slice(11)}</time></summary>
+    const html = [...shards].map(([title, events]) => {
+      let step = 0;  // 每个分片内推理步骤单独编号；命令执行、提示等不编号
+      return `<section class="shard"><h4 class="shard-title">${escapeHtml(title)}</h4>
+      ${events.map((event) => {
+        const numbered = NUMBERED_STEPS.has(event.message);
+        return `<div class="step${numbered ? " numbered" : ""}"${numbered ? ` data-step="${++step}"` : ""}><details>
+        <summary>${numbered ? `<span class="step-no">${step}</span>` : ""}<span class="step-label">${escapeHtml(event.message)}</span><span class="step-preview">${escapeHtml((event.detail || "").slice(0, 120))}</span><time>${formatTime(event.created_at).slice(11)}</time></summary>
         ${event.detail ? `<pre>${escapeHtml(event.detail)}</pre>` : ""}
-      </details></div>`).join("")}
-    </section>`).join("");
+      </details></div>`;
+      }).join("")}
+    </section>`;
+    }).join("");
     const more = drawer.hasMore ? '<div class="timeline-more"><button class="btn btn-sm" type="button" id="timeline-more">加载更多</button></div>' : "";
     const tools = '<div class="timeline-tools"><button class="btn btn-sm" type="button" data-expand="1">全部展开</button><button class="btn btn-sm" type="button" data-expand="0">全部收起</button></div>';
     $("drawer-body").innerHTML = tools + html + more;
@@ -1105,7 +1113,11 @@
   function applyRepoCatalog(data) {
     repos.items = data.repositories;
     repos.hidden = new Set(data.hidden);
-    repos.groups = data.groups.map((group) => ({ name: group.name, repositories: [...group.repositories] }));
+    // 凭据只在本地编辑态保存，接口只返回是否已配置
+    repos.groups = data.groups.map((group) => ({
+      name: group.name, previous_name: group.name, repositories: [...group.repositories],
+      codehub_configured: group.codehub_configured, codehub_private_token: "", codehub_app_code: "", clear_codehub: false, editing: false,
+    }));
     repos.loaded = true;
     repos.dirty = false;
     renderRepos();
@@ -1121,10 +1133,24 @@
     $("repos-readonly").hidden = editable;
     $("group-actions").hidden = !editable;
     $("repos-save").hidden = !editable;
-    $("group-list").innerHTML = repos.groups.map((group, index) => `<span class="tag group-tag" data-index="${index}">
-        <i class="swatch" style="background:${SERIES_COLORS[index % 8]}"></i>${escapeHtml(group.name)}<em>${group.repositories.length}</em>
-        ${editable ? `<button type="button" data-group-action="rename" title="重命名" aria-label="重命名">✎</button><button type="button" data-group-action="remove" title="删除分组" aria-label="删除分组">×</button>` : ""}
-      </span>`).join("") || '<span class="muted-cell">还没有分组</span>';
+    $("group-list").innerHTML = repos.groups.map((group, index) => `<div class="group-row" data-index="${index}">
+        <div class="group-line">
+          <span class="group-name"><i class="swatch" style="background:${SERIES_COLORS[index % 8]}"></i>${escapeHtml(group.name)}</span>
+          <span class="muted-cell">${group.repositories.length} 个代码仓</span>
+          ${credentialBadge(group)}
+          ${editable ? `<span class="group-ops">
+            <button class="btn btn-sm" type="button" data-group-action="credentials">${group.editing ? "收起凭据" : "CodeHub 凭据"}</button>
+            <button class="btn btn-sm" type="button" data-group-action="rename">重命名</button>
+            <button class="btn btn-sm btn-danger" type="button" data-group-action="remove">删除</button>
+          </span>` : ""}
+        </div>
+        ${editable && group.editing ? `<div class="cred-form">
+          <label>Private Token<input type="password" data-cred="codehub_private_token" value="${escapeHtml(group.codehub_private_token)}" placeholder="${group.codehub_configured ? "已配置，留空保持不变" : "请输入"}" autocomplete="new-password" /></label>
+          <label>AppCode<input type="password" data-cred="codehub_app_code" value="${escapeHtml(group.codehub_app_code)}" placeholder="${group.codehub_configured ? "已配置，留空保持不变" : "请输入"}" autocomplete="new-password" /></label>
+          ${group.codehub_configured ? '<button class="btn btn-sm" type="button" data-group-action="clear">改回默认凭据</button>' : ""}
+          <p class="muted">该分组内代码仓的检视意见、整体评价与自动解决都用这套凭据发送到 CodeHub；未配置时使用服务默认凭据。保存后不会再显示。</p>
+        </div>` : ""}
+      </div>`).join("") || '<span class="muted-cell">还没有分组</span>';
 
     const keyword = $("repos-search").value.trim().toLowerCase();
     const filter = $("repos-filter").value;
@@ -1155,6 +1181,15 @@
       : '<tr><td colspan="5" class="empty">没有符合条件的代码仓</td></tr>';
   }
 
+  /** 分组凭据状态：独立凭据 / 默认凭据，以及未保存的变更。 */
+  function credentialBadge(group) {
+    if (group.clear_codehub) return '<span class="cred-badge pending">将改回默认凭据（未保存）</span>';
+    if (group.codehub_private_token || group.codehub_app_code) return '<span class="cred-badge pending">新凭据待保存</span>';
+    return group.codehub_configured
+      ? '<span class="cred-badge on">独立 CodeHub 凭据</span>'
+      : '<span class="cred-badge">使用默认凭据</span>';
+  }
+
   function markReposDirty() {
     repos.dirty = true;
     $("repos-status").textContent = "有未保存的修改";
@@ -1166,7 +1201,10 @@
     const name = $("group-input").value.trim();
     if (!name) return toast("请输入分组名称");
     if (repos.groups.some((group) => group.name === name)) return toast("分组名称已存在");
-    repos.groups.push({ name, repositories: [] });
+    repos.groups.push({
+      name, previous_name: null, repositories: [], codehub_configured: false,
+      codehub_private_token: "", codehub_app_code: "", clear_codehub: false, editing: false,
+    });
     $("group-input").value = "";
     markReposDirty();
   }
@@ -1181,8 +1219,15 @@
   $("group-list").addEventListener("click", (event) => {
     const button = event.target.closest("[data-group-action]");
     if (!button || !requireAdmin()) return;
-    const group = repos.groups[Number(button.closest(".group-tag").dataset.index)];
-    if (button.dataset.groupAction === "remove") {
+    const group = repos.groups[Number(button.closest(".group-row").dataset.index)];
+    const action = button.dataset.groupAction;
+    if (action === "credentials") {
+      group.editing = !group.editing;
+      return renderRepos();
+    }
+    if (action === "clear") {
+      Object.assign(group, { clear_codehub: true, codehub_private_token: "", codehub_app_code: "", editing: false });
+    } else if (action === "remove") {
       if (!confirm(`删除分组“${group.name}”？其中的代码仓将变为未分组。`)) return;
       repos.groups.splice(repos.groups.indexOf(group), 1);
     } else {
@@ -1192,6 +1237,16 @@
       group.name = name;
     }
     markReposDirty();
+  });
+  // 凭据输入只更新本地状态，不重绘（避免输入框失去焦点）
+  $("group-list").addEventListener("input", (event) => {
+    const input = event.target.closest("[data-cred]");
+    if (!input) return;
+    const group = repos.groups[Number(input.closest(".group-row").dataset.index)];
+    group[input.dataset.cred] = input.value.trim();
+    if (input.value.trim()) group.clear_codehub = false;
+    repos.dirty = true;
+    $("repos-status").textContent = "有未保存的修改";
   });
   $("repos-rows").addEventListener("click", (event) => {
     const button = event.target.closest('[data-repo-action="toggle"]');
@@ -1216,7 +1271,17 @@
     try {
       const data = await api("/api/settings/repositories", {
         method: "PUT",
-        body: { hidden: [...repos.hidden], groups: repos.groups },
+        body: {
+          hidden: [...repos.hidden],
+          groups: repos.groups.map((group) => ({
+            name: group.name,
+            previous_name: group.previous_name || null,
+            repositories: group.repositories,
+            codehub_private_token: group.codehub_private_token || null,
+            codehub_app_code: group.codehub_app_code || null,
+            clear_codehub: group.clear_codehub,
+          })),
+        },
       });
       applyRepoCatalog(data);
       $("repos-status").textContent = `已保存 · ${repos.hidden.size} 个已隐藏 · ${repos.groups.length} 个分组`;

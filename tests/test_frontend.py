@@ -94,3 +94,15 @@ def test_stats_page_charts():
     assert CSS.count("--c1:") == 2
     # 检视意见回复分布改为环形图，不再是整行横条
     assert 'id="reply-donut"' in HTML and "reply-bar" not in HTML
+
+
+def test_reasoning_steps_numbered_and_footer():
+    # 推理步骤按分片编号，命令执行与提示不编号
+    assert 'NUMBERED_STEPS = new Set(["推理步骤", "推理摘要"])' in JS and 'class="step-no"' in JS
+    assert "Copyright © l00003834" in HTML
+
+
+def test_group_codehub_credentials_ui():
+    # 分组独立凭据：密码框输入、留空保持不变、可改回默认凭据，提交时带 previous_name 以便重命名保留
+    for marker in ('data-cred="codehub_private_token"', 'data-cred="codehub_app_code"', "clear_codehub", "previous_name"):
+        assert marker in JS, marker

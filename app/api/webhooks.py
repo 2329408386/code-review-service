@@ -101,7 +101,9 @@ def note_event(payload: NoteWebhook, runtime: Runtime) -> JSONResponse:
 
     if attrs.system:
         return ignored("system note")
-    if attrs.author_id is not None and attrs.author_id == runtime.codehub.current_user_id():
+    # 该 MR 所属代码仓决定使用哪套 CodeHub 凭据（分组可配置独立凭据）
+    repository = runtime.database.repository_for_mr(project_id, mr_iid)
+    if attrs.author_id is not None and attrs.author_id == runtime.codehub.current_user_id(repository):
         return ignored("service note")
     recorded = runtime.database.record_review_reply(
         project_id=project_id,
@@ -117,7 +119,7 @@ def note_event(payload: NoteWebhook, runtime: Runtime) -> JSONResponse:
     if not should_auto_resolve(attrs.note):
         return ignored("no auto-resolve keyword")
     try:
-        runtime.codehub.resolve_discussion(project_id, mr_iid, attrs.discussion_id)
+        runtime.codehub.resolve_discussion(project_id, mr_iid, attrs.discussion_id, repository)
     except CodeHubError as exc:
         LOGGER.warning("[mr=%s][discussion=%s] auto-resolve failed: %s", mr_iid, attrs.discussion_id, exc)
         return JSONResponse(

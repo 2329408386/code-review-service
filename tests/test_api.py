@@ -79,7 +79,7 @@ def test_note_webhook(client, runtime, monkeypatch):
     [finding_id] = runtime.database.complete_review(task.id, [candidate()], stats={})
     runtime.database.mark_comment_sent(finding_id, "disc-1")
     resolved: list[tuple] = []
-    monkeypatch.setattr(runtime.codehub, "current_user_id", lambda: 99)
+    monkeypatch.setattr(runtime.codehub, "current_user_id", lambda repository=None: 99)
     monkeypatch.setattr(runtime.codehub, "resolve_discussion", lambda *args: resolved.append(args))
 
     def note(text, note_id=1, author_id=5, system=False):
@@ -94,7 +94,7 @@ def test_note_webhook(client, runtime, monkeypatch):
     assert note("稍后处理", note_id=2).json()["reason"] == "no auto-resolve keyword"
     assert note("已确认").json()["action"] == "resolved"
     assert note("已确认").json()["reason"] == "duplicate note"
-    assert resolved == [(7, 3, "disc-1")]
+    assert resolved == [(7, 3, "disc-1", task.repository_name)]  # 按 MR 所属代码仓选择凭据
 
     def fail(*_):
         raise CodeHubError("down", kind="server_error", retryable=True)
@@ -249,6 +249,25 @@ def test_repository_catalog_hides_and_groups(client, runtime):
     assert client.get("/api/stats/overview", params={"repository": "beta"}).json()["totals"]["review_count"] == 1
     assert client.get("/api/stats/overview", params={"group": "不存在"}).status_code == 404
     assert client.get("/api/stats/overview", params={"range": "1y"}).status_code == 422
+
+
+def test_group_codehub_credentials(client, runtime):
+    headers = login(client)
+    put = lambda groups: client.put("/api/settings/repositories", json={"groups": groups}, headers=headers)  # noqa: E731
+    half = put([{"name": "核心", "repositories": ["alpha"], "codehub_private_token": "t-1"}])
+    assert half.status_code == 422  # Token 与 AppCode 必须成对
+    saved = put([{"name": "核心", "repositories": ["alpha"], "codehub_private_token": "t-1", "codehub_app_code": "a-1"}])
+    assert saved.json()["groups"][0]["codehub_configured"] is True
+    assert "t-1" not in client.get("/api/settings/repositories").text  # 凭据不回显
+    assert runtime.codehub.credentials_for("alpha").private_token == "t-1"
+    assert runtime.codehub.credentials_for("beta").private_token == ""  # 其余代码仓用默认凭据
+
+    # 留空保持原凭据，重命名时按 previous_name 保留
+    put([{"name": "平台", "previous_name": "核心", "repositories": ["alpha", "beta"]}])
+    assert runtime.codehub.credentials_for("beta").app_code == "a-1"
+    assert client.get("/health").json()["codehub_configured"] is True
+    put([{"name": "平台", "repositories": ["alpha"], "clear_codehub": True}])
+    assert runtime.catalog.codehub_credentials("alpha") is None
 
 
 def test_health_tokens_and_index(client, runtime):

@@ -540,6 +540,15 @@ class Database:
         )
         return [dict(row) for row in rows]
 
+    def repository_for_mr(self, project_id: int, mr_iid: int) -> str | None:
+        """MR 所属代码仓（取该 MR 最近一次检视任务）。"""
+        row = self._one(
+            "SELECT repository_name FROM review_tasks WHERE project_id = ? AND mr_iid = ? AND origin = 'codehub' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (project_id, mr_iid),
+        )
+        return str(row[0]) if row else None
+
     def authors(self) -> list[str]:
         rows = self._all(
             "SELECT DISTINCT author FROM review_tasks WHERE author <> '' ORDER BY author COLLATE NOCASE"
