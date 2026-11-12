@@ -16,7 +16,7 @@ def test_every_script_element_id_exists_in_html():
     script_ids = {item for item in script_ids if not item.startswith("$")}
     missing = sorted(item for item in script_ids if item not in html_ids)
     assert not missing, f"app.js 引用了 index.html 中不存在的元素：{missing}"
-    for page in ("reviews", "stats", "repos", "models", "scope"):
+    for page in ("reviews", "stats", "repos", "models", "scope", "help"):
         assert f'id="page-{page}"' in HTML and f'href="#{page}"' in HTML
 
 
@@ -106,3 +106,9 @@ def test_group_codehub_credentials_ui():
     # 分组独立凭据：密码框输入、留空保持不变、可改回默认凭据，提交时带 previous_name 以便重命名保留
     for marker in ('data-cred="codehub_private_token"', 'data-cred="codehub_app_code"', "clear_codehub", "previous_name"):
         assert marker in JS, marker
+
+
+def test_help_page_renders_docs():
+    # 使用说明页：读取 /api/docs，前端自带 Markdown 渲染（内网不依赖 CDN），内容先转义再加格式
+    assert '"/api/docs"' in JS and "function renderMarkdown" in JS
+    assert "escapeHtml(part)" in JS

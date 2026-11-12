@@ -270,6 +270,15 @@ def test_group_codehub_credentials(client, runtime):
     assert runtime.catalog.codehub_credentials("alpha") is None
 
 
+def test_docs_endpoints(client):
+    docs = client.get("/api/docs").json()
+    assert [doc["key"] for doc in docs] == ["guide", "onboarding"]
+    onboarding = client.get("/api/docs/onboarding").json()
+    assert "codehub-note" in onboarding["markdown"] and "检视意见分类" in onboarding["markdown"]
+    assert "李程鹏" in client.get("/api/docs/guide").json()["markdown"]
+    assert client.get("/api/docs/..%2F.env").status_code == 404  # 只允许白名单文档
+
+
 def test_health_tokens_and_index(client, runtime):
     health = client.get("/health").json()
     assert health["status"] == "ok" and health["queue_size"] == 0 and health["publisher_alive"] is False

@@ -436,6 +436,32 @@ tr.is-hidden .repo-name { text-decoration: line-through; text-decoration-color: 
 .scope-add { display: flex; gap: 8px; }
 .scope-add input { flex: 1; height: 30px; }
 
+/* ============ 使用说明 ============ */
+.nav-secondary { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.help-tabs { margin-bottom: 16px; }
+.help-layout { display: grid; grid-template-columns: minmax(0, 860px) 200px; gap: 24px; align-items: start; }
+.help-toc { position: sticky; top: 24px; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.help-toc h3 { font-size: 12px; color: var(--text-3); font-weight: 500; margin-bottom: 6px; }
+.help-toc a { padding: 4px 10px; border-left: 2px solid var(--border); color: var(--text-2); }
+.help-toc a:hover { color: var(--primary-text); border-left-color: var(--primary); text-decoration: none; }
+.doc { padding: 28px 36px 36px; line-height: 1.8; font-size: 14px; }
+.doc h1 { font-size: 22px; margin-bottom: 12px; }
+.doc h2 { font-size: 17px; margin: 28px 0 10px; padding-top: 4px; scroll-margin-top: 16px; }
+.doc h3 { font-size: 15px; margin: 20px 0 8px; }
+.doc h4 { font-size: 14px; margin: 16px 0 6px; }
+.doc p { margin: 8px 0; }
+.doc ul, .doc ol { margin: 8px 0; padding-left: 22px; }
+.doc li { margin: 4px 0; }
+.doc hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
+.doc code { font-family: var(--mono); font-size: 12.5px; padding: 1px 6px; border-radius: 4px; background: var(--neutral-soft); overflow-wrap: anywhere; }
+.doc pre { margin: 10px 0; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--border); overflow-x: auto; }
+.doc pre code { padding: 0; background: none; }
+.doc blockquote { margin: 12px 0; padding: 10px 14px; border-left: 3px solid var(--warning); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--warning-soft); color: var(--text); }
+.doc .table-wrap { margin: 12px 0; }
+.doc .table td, .doc .table th { white-space: normal; line-height: 1.6; }
+.doc .table td code { white-space: normal; }
+.doc .table td strong { white-space: nowrap; }
+
 /* ============ 详情抽屉 ============ */
 .drawer-mask { position: fixed; inset: 0; background: rgba(15, 18, 30, 0.32); z-index: 40; }
 .drawer {
@@ -519,6 +545,8 @@ tr.is-hidden .repo-name { text-decoration: line-through; text-decoration-color: 
 
 /* ============ 响应式 ============ */
 @media (max-width: 1100px) {
+  .help-layout { grid-template-columns: 1fr; }
+  .help-toc { display: none; }
   .kpis-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .span-8, .span-4 { grid-column: span 12; }
   .donut-pair { flex-direction: row; flex-wrap: wrap; }
@@ -533,6 +561,8 @@ tr.is-hidden .repo-name { text-decoration: line-through; text-decoration-color: 
   .brand { padding: 0; }
   .brand small, .sidebar-foot { display: none; }
   .nav { flex-direction: row; }
+  .nav-secondary { margin: 0; padding: 0; border: 0; }
+  .doc { padding: 20px 18px; }
   .nav a { padding: 7px 10px; white-space: nowrap; }
   .main { padding: 0 16px 20px; min-height: 0; }
   .kpis, .kpis-3 { grid-template-columns: 1fr; }

@@ -4,7 +4,7 @@ FastAPI 服务：接收 CodeHub MR webhook → 隔离 clone → 调用 Codex CLI
 
 ## 常用命令
 - 启动（默认 8083 端口）：`./run.sh`（首次会自动创建 `.venv` 并安装依赖；`PORT=xxxx ./run.sh` 可改端口）
-- 测试：`.venv/bin/python -m pytest -q`（当前 89 个用例全部通过，改动后必须保持全绿）
+- 测试：`.venv/bin/python -m pytest -q`（当前 91 个用例全部通过，改动后必须保持全绿）
 - 单个测试：`.venv/bin/python -m pytest -q tests/test_xxx.py -k name`
 - 端到端冒烟（真实 Codex + 大模型网关）：`.venv/bin/python tests/e2e_smoke.py`（读取 `.env.example`，再用 `.env` 覆盖密钥）
 - 健康检查：`curl -s localhost:8083/health`
@@ -26,14 +26,14 @@ FastAPI 服务：接收 CodeHub MR webhook → 隔离 clone → 调用 Codex CLI
 - `main.py` — `create_app()`：组装运行时、请求日志中间件、路由与静态资源；模块级 `app = create_app()`
 - `config.py` / `logging_config.py` / `models.py`（Webhook 载荷、API 入参、领域记录）/ `storage.py`（SQLite `Database`）
 - `runtime.py` — `ReviewRuntime`：组装组件，检视工作线程、延后任务调度线程、启动恢复
-- `api/` — 路由：`auth`、`webhooks`、`local`（本地提交检视）、`reviews`（列表/详情/事件/SSE/导出/管理员操作）、`settings`（模型路由、检视范围、代码仓管理）、`stats`（`/api/stats/overview`：按时间范围与 全部/分组/代码仓 维度汇总）；`deps.py` 提供 `Runtime`、`AdminOnly`
+- `api/` — 路由：`auth`、`webhooks`、`local`（本地提交检视）、`reviews`（列表/详情/事件/SSE/导出/管理员操作）、`settings`（模型路由、检视范围、代码仓管理）、`docs`（使用说明文档）、`stats`（`/api/stats/overview`：按时间范围与 全部/分组/代码仓 维度汇总）；`deps.py` 提供 `Runtime`、`AdminOnly`
 - `review/` — 检视领域：`service.py`（单次 MR 主流程）、`diff.py`（解析/过滤/分片）、`findings.py`（定位校验/去重）、`prompts.py`、`scope.py`（检视范围与跳过规则）、`repos.py`（代码仓隐藏与分组，只影响展示与统计，隐藏的仓库仍照常检视）、`git.py`（镜像/clone/diff）、`codegraph.py`（可选索引，失败只降级）
 - 任务 `origin`：`codehub`（MR，结果回写 CodeHub）/ `local`（本地提交，意见与评价状态为 `local`，不回写）
 - `llm/` — `registry.py`（模型路由与网关）、`codex.py`（Codex CLI 调用与重试）、`output.py`（输出 JSON 与事件流解析）、`chat.py`（OpenAI 兼容 /models、/chat/completions）
 - `codehub/` — `client.py`（CodeHub OpenAPI）、`publisher.py`（单线程限流回写评论与评价）、`evaluation.py`（MR 评分与评价文案）、`replies.py`（回复分类与自动解决）
 
 ## 文档
-- `docs/接入指南.md`（CodeHub 回调配置、开通意见发表）与 `docs/使用说明.md`（平台普通用户使用说明，不含管理员操作）；平台功能变化时同步更新。
+- `docs/接入指南.md`（CodeHub 回调配置、开通意见发表）与 `docs/使用说明.md`（平台普通用户使用说明，不含管理员操作）；控制台「使用说明」页通过 `api/docs.py`（白名单）读取并在前端渲染（自带简易 Markdown 渲染，不依赖 CDN），平台功能变化时同步更新。
 
 ## 约定
 - 测试用 `tests/conftest.py` 的 `settings`/`database` fixture（tmp_path 隔离，`_env_file=None`）；公共构造工具在 `tests/helpers.py`（含伪造的 codex CLI）。

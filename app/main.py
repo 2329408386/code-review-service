@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import auth, local, reviews, settings as settings_api, stats, webhooks
+from .api import auth, docs, local, reviews, settings as settings_api, stats, webhooks
 from .api.deps import AdminTokens
 from .config import Settings, get_settings
 from .logging_config import configure_logging
@@ -75,7 +75,7 @@ def create_app(
         )
         return response
 
-    for module in (auth, webhooks, local, reviews, settings_api, stats):
+    for module in (auth, webhooks, local, reviews, settings_api, stats, docs):
         app.include_router(module.router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

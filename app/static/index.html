@@ -37,6 +37,11 @@
             <svg viewBox="0 0 24 24"><path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9" /></svg>检视范围
           </a>
         </nav>
+        <nav class="nav nav-secondary" aria-label="帮助">
+          <a href="#help" data-page="help">
+            <svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2zM4 21V5M8 7h6M8 11h6" /></svg>使用说明
+          </a>
+        </nav>
         <div class="sidebar-foot">
           <div class="health" id="health"><span class="dot"></span><span id="health-text">检查服务状态…</span></div>
         </div>
@@ -278,6 +283,15 @@
               <button class="btn" id="scope-add" type="button">添加代码仓</button>
               <button class="btn btn-primary" id="scope-save" type="button">保存并生效</button>
             </div>
+          </div>
+        </section>
+
+        <!-- 使用说明 -->
+        <section class="page" id="page-help" hidden>
+          <div class="segmented help-tabs" id="help-tabs" role="tablist" aria-label="文档"></div>
+          <div class="help-layout">
+            <article class="card doc" id="help-content"><div class="loading">加载文档…</div></article>
+            <aside class="help-toc" id="help-toc"></aside>
           </div>
         </section>
 

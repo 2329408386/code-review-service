@@ -3,12 +3,13 @@
  * 结构：
  *   1. 工具函数（DOM、请求、格式化）
  *   2. 管理员登录态
- *   3. 页面路由（#reviews / #stats / #repos / #models / #scope）
+ *   3. 页面路由（#reviews / #stats / #repos / #models / #scope / #help）
  *   4. 检视记录列表 + 详情抽屉（概览 / 意见 / 推理过程，SSE 实时推送）
  *   5. 数据统计（SVG 图表：趋势、环形图、表内比例条）
  *   6. 代码仓管理（隐藏、分组、分组独立的 CodeHub 凭据）
  *   7. 模型路由配置
  *   8. 检视范围配置
+ *   9. 使用说明（渲染 docs/ 下的 Markdown）
  */
 (() => {
   "use strict";
@@ -191,7 +192,7 @@
 
   // ==================== 3. 页面路由 ====================
 
-  const PAGES = { reviews: "检视记录", stats: "数据统计", repos: "代码仓", models: "模型路由", scope: "检视范围" };
+  const PAGES = { reviews: "检视记录", stats: "数据统计", repos: "代码仓", models: "模型路由", scope: "检视范围", help: "使用说明" };
   let currentPage = "reviews";
 
   function route() {
@@ -206,6 +207,7 @@
     if (currentPage === "repos") loadRepos();
     if (currentPage === "models") loadModels();
     if (currentPage === "scope") loadScope();
+    if (currentPage === "help") loadHelp();
   }
   window.addEventListener("hashchange", route);
 
@@ -1576,6 +1578,118 @@
       toast("检视范围已保存并生效");
     } catch (error) {
       $("scope-status").textContent = `保存失败：${error.message}`;
+    }
+  });
+
+  // ==================== 9. 使用说明 ====================
+
+  const help = { docs: [], current: "guide", cache: {} };
+  const DOC_TITLES = { 接入指南: "onboarding", 使用说明: "guide" };
+
+  /** 行内 Markdown：代码、加粗、链接；《接入指南》《使用说明》转为站内切换链接。 */
+  function mdInline(text) {
+    return text.split(/(`[^`]+`)/).map((part) => {
+      if (/^`[^`]+`$/.test(part)) return `<code>${escapeHtml(part.slice(1, -1))}</code>`;
+      return escapeHtml(part)
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+        .replace(/&lt;(https?:\/\/[^\s&]+)&gt;/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
+        .replace(/《(接入指南|使用说明)》/g, (_, title) => `<a href="#help" data-doc="${DOC_TITLES[title]}">《${title}》</a>`);
+    }).join("");
+  }
+
+  const splitRow = (line) => line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
+
+  /** 文档用到的 Markdown 子集：标题、段落、列表、表格、引用、代码块、分隔线。返回 { html, toc }。 */
+  function renderMarkdown(markdown) {
+    const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+    const out = [];
+    const toc = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) { i += 1; continue; }
+      if (line.startsWith("```")) {
+        const code = [];
+        for (i += 1; i < lines.length && !lines[i].startsWith("```"); i += 1) code.push(lines[i]);
+        i += 1;
+        out.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+        continue;
+      }
+      const heading = line.match(/^(#{1,4})\s+(.*)$/);
+      if (heading) {
+        const level = heading[1].length;
+        const id = `doc-h-${toc.length}`;
+        if (level === 2) toc.push({ id, text: heading[2] });
+        out.push(`<h${level}${level === 2 ? ` id="${id}"` : ""}>${mdInline(heading[2])}</h${level}>`);
+        i += 1;
+        continue;
+      }
+      if (/^-{3,}\s*$/.test(line)) { out.push("<hr />"); i += 1; continue; }
+      if (line.startsWith(">")) {
+        const quote = [];
+        for (; i < lines.length && lines[i].startsWith(">"); i += 1) quote.push(lines[i].replace(/^>\s?/, ""));
+        out.push(`<blockquote>${mdInline(quote.join(" "))}</blockquote>`);
+        continue;
+      }
+      if (line.trim().startsWith("|") && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1] || "") && (lines[i + 1] || "").includes("-")) {
+        const head = splitRow(line);
+        const rows = [];
+        for (i += 2; i < lines.length && lines[i].trim().startsWith("|"); i += 1) rows.push(splitRow(lines[i]));
+        out.push(`<div class="table-wrap"><table class="table"><thead><tr>${head.map((c) => `<th>${mdInline(c)}</th>`).join("")}</tr></thead>
+          <tbody>${rows.map((row) => `<tr>${row.map((c) => `<td>${mdInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+        continue;
+      }
+      const listMatch = line.match(/^\s*([-*]|\d+\.)\s+/);
+      if (listMatch) {
+        const ordered = /\d/.test(listMatch[1]);
+        const items = [];
+        for (; i < lines.length; i += 1) {
+          const item = lines[i].match(/^\s*([-*]|\d+\.)\s+(.*)$/);
+          if (item) items.push(item[2]);
+          else if (lines[i].trim() && /^\s{2,}/.test(lines[i]) && items.length) items[items.length - 1] += ` ${lines[i].trim()}`;
+          else break;
+        }
+        const tag = ordered ? "ol" : "ul";
+        out.push(`<${tag}>${items.map((item) => `<li>${mdInline(item)}</li>`).join("")}</${tag}>`);
+        continue;
+      }
+      const para = [];
+      for (; i < lines.length && lines[i].trim() && !/^(#{1,4}\s|>|```|\||\s*([-*]|\d+\.)\s|-{3,}\s*$)/.test(lines[i]); i += 1) para.push(lines[i].trim());
+      if (!para.length) { out.push(`<p>${mdInline(line)}</p>`); i += 1; continue; }
+      out.push(`<p>${mdInline(para.join(" "))}</p>`);
+    }
+    return { html: out.join("\n"), toc };
+  }
+
+  async function loadHelp() {
+    try {
+      if (!help.docs.length) help.docs = await api("/api/docs");
+      if (!help.docs.some((doc) => doc.key === help.current)) help.current = help.docs[0]?.key;
+      $("help-tabs").innerHTML = help.docs.map((doc) => `<button type="button" data-doc="${escapeHtml(doc.key)}" class="${doc.key === help.current ? "on" : ""}">${escapeHtml(doc.title)}</button>`).join("");
+      if (!help.cache[help.current]) help.cache[help.current] = await api(`/api/docs/${encodeURIComponent(help.current)}`);
+      const { html, toc } = renderMarkdown(help.cache[help.current].markdown);
+      $("help-content").innerHTML = html;
+      $("help-toc").innerHTML = toc.length
+        ? `<h3>目录</h3>${toc.map((item) => `<a href="#help" data-anchor="${item.id}">${escapeHtml(item.text)}</a>`).join("")}`
+        : "";
+    } catch (error) {
+      $("help-content").innerHTML = `<div class="empty">文档加载失败：${escapeHtml(error.message)}</div>`;
+    }
+  }
+
+  $("page-help").addEventListener("click", (event) => {
+    const docLink = event.target.closest("[data-doc]");
+    if (docLink) {
+      event.preventDefault();
+      help.current = docLink.dataset.doc;
+      window.scrollTo({ top: 0 });
+      return loadHelp();
+    }
+    const anchor = event.target.closest("[data-anchor]");
+    if (anchor) {
+      event.preventDefault();
+      document.getElementById(anchor.dataset.anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   });
 
