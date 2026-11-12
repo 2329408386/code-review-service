@@ -48,6 +48,7 @@ class ChunkResult:
     """一个分片的检视结果（含多轮调用的累计统计）。"""
 
     findings: list[FindingCandidate] = field(default_factory=list)
+    model: str = ""  # 产出意见的模型
     summary: str = ""
     raw_outputs: list[dict[str, str]] = field(default_factory=list)
     duration: float = 0.0
@@ -182,6 +183,7 @@ class ReviewService:
             results = [future.result() for future in futures]
 
         # ---------- 汇总落库
+        finding_models = {id(item): result.model for result in results for item in result.findings}
         findings = deduplicate_findings([item for result in results for item in result.findings])
         rejected = sum(result.rejected for result in results)
         self._event(
@@ -206,6 +208,7 @@ class ReviewService:
                 "token_cached_input": sum(r.cached_tokens for r in results),
             },
             comment_status=ORIGIN_LOCAL if local else "pending",
+            models=[finding_models.get(id(item), "") for item in findings],
         )
         self._event(task.id, "review", "completed", f"检视完成：发现 {len(findings)} 条有效问题")
         if not local:
@@ -271,6 +274,9 @@ class ReviewService:
                     failover=has_next,
                 )
             except ModelUnavailable as exc:
+                self.database.record_model_call(
+                    task.id, candidate.name if candidate else DEFAULT_MODEL_LABEL, success=False
+                )
                 marked = self.registry.report_failure(candidate, str(exc))
                 if not has_next:
                     raise
@@ -285,6 +291,11 @@ class ReviewService:
                 continue
             self.registry.report_success(candidate)
             self.database.record_model_usage(task.id, result.model)
+            self.database.record_model_call(
+                task.id, result.model,
+                input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+                cached_tokens=result.cached_input_tokens, duration=result.duration_seconds,
+            )
             return result
         raise AssertionError("unreachable")
 
@@ -302,6 +313,7 @@ class ReviewService:
         prompt = build_large_file_prompt(task, chunk.diff) if chunk.direct_llm else build_review_prompt(task, chunk.diff)
         discovery = self._run_codex(task, worktree, prompt, stage, f"{kind}-{index}", route)
         result.add_run(f"{kind}-{index}", discovery)
+        result.model = discovery.model
         result.summary = discovery.output.summary.strip()
         discovered = self._validate(result, discovery.output.findings, chunk.diff)
         self._event(
@@ -362,6 +374,10 @@ class ReviewService:
                 continue
             self.database.add_token_usage(
                 task.id, input_tokens=result.input_tokens, output_tokens=result.output_tokens
+            )
+            self.database.record_model_call(
+                task.id, model, kind="evaluation",
+                input_tokens=result.input_tokens, output_tokens=result.output_tokens,
             )
             return result.text or None
         return None

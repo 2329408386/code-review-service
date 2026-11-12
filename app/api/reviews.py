@@ -53,7 +53,8 @@ def list_reviews(
     page_size: int = Query(default=30, ge=1),
 ) -> dict:
     page_size = page_size if page_size in PAGE_SIZES else 30
-    filters = {"repository": repository, "author": author, "statuses": status}
+    # 管理员隐藏的代码仓不在检视记录中显示（仍照常检视）
+    filters = {"repository": repository, "author": author, "statuses": status, "exclude": runtime.catalog.hidden()}
     tasks = runtime.database.list_tasks(**filters, sort=sort, limit=page_size, offset=(page - 1) * page_size)
     summary = runtime.database.task_summary(**filters)
     total = summary["review_count"]
@@ -163,7 +164,7 @@ async def event_stream(
 
 @router.get("/repositories")
 def repositories(runtime: Runtime) -> list[dict]:
-    return runtime.database.repositories()
+    return runtime.database.repositories(exclude=runtime.catalog.hidden())
 
 
 @router.get("/authors")

@@ -220,13 +220,45 @@ def test_model_and_scope_settings(client, monkeypatch):
     assert client.get("/api/settings/review-scope").json() == scope.json()
 
 
+def test_repository_catalog_hides_and_groups(client, runtime):
+    alpha = create_task(runtime.database, repository_name="alpha", source_sha="1" * 40)
+    create_task(runtime.database, repository_name="beta", source_sha="2" * 40)
+    create_task(runtime.database, repository_name="gamma", source_sha="3" * 40)
+    runtime.database.complete_review(alpha.id, [candidate()], stats={"token_input": 10, "token_output": 5})
+    payload = {"hidden": ["gamma"], "groups": [{"name": "核心", "repositories": ["alpha"]}]}
+    assert client.put("/api/settings/repositories", json=payload).status_code == 401
+    headers = login(client)
+    bad = {"groups": [{"name": "a", "repositories": ["alpha"]}, {"name": "b", "repositories": ["alpha"]}]}
+    assert client.put("/api/settings/repositories", json=bad, headers=headers).status_code == 422
+    assert client.put("/api/settings/repositories", json={"groups": [{"name": " "}]}, headers=headers).status_code == 422
+    saved = client.put("/api/settings/repositories", json=payload, headers=headers).json()
+    rows = {row["name"]: row for row in saved["repositories"]}
+    assert rows["gamma"]["hidden"] and rows["alpha"]["group"] == "核心" and rows["beta"]["group"] is None
+    assert client.get("/api/settings/repositories").json() == saved
+
+    # 隐藏的代码仓不在检视记录、代码仓下拉与统计中出现
+    assert {t["repository_name"] for t in client.get("/api/reviews").json()["items"]} == {"alpha", "beta"}
+    assert {r["name"] for r in client.get("/api/repositories").json()} == {"alpha", "beta"}
+    overview = client.get("/api/stats/overview", params={"range": "all"}).json()
+    assert {r["name"] for r in overview["repositories"]} == {"alpha", "beta"}
+    assert [(g["name"], g["review_count"], g["total_tokens"]) for g in overview["groups"]] == [("核心", 1, 15), ("未分组", 1, 0)]
+    grouped = client.get("/api/stats/overview", params={"group": "核心"}).json()
+    assert grouped["totals"]["review_count"] == 1 and grouped["totals"]["finding_count"] == 1
+    ungrouped = client.get("/api/stats/overview", params={"group": "__ungrouped__"}).json()
+    assert [r["name"] for r in ungrouped["repositories"]] == ["beta"]
+    assert client.get("/api/stats/overview", params={"repository": "beta"}).json()["totals"]["review_count"] == 1
+    assert client.get("/api/stats/overview", params={"group": "不存在"}).status_code == 404
+    assert client.get("/api/stats/overview", params={"range": "1y"}).status_code == 422
+
+
 def test_health_tokens_and_index(client, runtime):
     health = client.get("/health").json()
     assert health["status"] == "ok" and health["queue_size"] == 0 and health["publisher_alive"] is False
     task = create_task(runtime.database)
     runtime.database.complete_review(task.id, [], stats={"token_input": 10, "token_output": 5})
-    tokens = client.get("/api/stats/tokens", params={"limit": 5}).json()
-    assert tokens["summary"]["total_tokens"] == 15 and len(tokens["items"]) == 1
+    stats = client.get("/api/stats/overview", params={"range": "7d"}).json()
+    assert stats["totals"]["total_tokens"] == 15 and stats["range"]["key"] == "7d"
+    assert client.get("/api/stats/tokens").status_code == 404  # 流水明细已移除
     index = client.get("/")
     assert index.status_code == 200 and "/static/app.js?v=" in index.text and "/static/style.css?v=" in index.text
     assert index.headers["cache-control"] == "no-cache"

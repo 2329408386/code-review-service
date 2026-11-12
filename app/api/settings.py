@@ -1,11 +1,12 @@
-"""运行时配置：模型路由、检视范围（读取公开，修改需管理员）。"""
+"""运行时配置：模型路由、检视范围、代码仓管理（读取公开，修改需管理员）。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
 from ..llm import chat
 from ..llm.registry import REASONING_EFFORTS, Gateway, ModelConfigurationError, validate_base_url
-from ..models import ModelConfigurationInput, ModelDiscoveryRequest, ReviewScopeInput
+from ..models import ModelConfigurationInput, ModelDiscoveryRequest, RepositoryCatalogInput, ReviewScopeInput
+from ..review.repos import RepositoryCatalogError
 from ..review.scope import ReviewScopeError
 from .deps import AdminOnly, Runtime
 
@@ -56,3 +57,29 @@ def update_review_scope(configuration: ReviewScopeInput, runtime: Runtime) -> di
         return {"rules": runtime.scope.replace([rule.model_dump() for rule in configuration.rules])}
     except ReviewScopeError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _repository_catalog(runtime: Runtime) -> dict:
+    """所有出现过的代码仓（含已隐藏）及其检视次数、最近检视时间、分组与隐藏标记。"""
+    configuration = runtime.catalog.configuration()
+    hidden = set(configuration["hidden"])
+    owner = {repo: group["name"] for group in configuration["groups"] for repo in group["repositories"]}
+    repositories = [
+        row | {"hidden": row["name"] in hidden, "group": owner.get(row["name"])}
+        for row in runtime.database.repositories()
+    ]
+    return configuration | {"repositories": repositories}
+
+
+@router.get("/repositories")
+def get_repositories(runtime: Runtime) -> dict:
+    return _repository_catalog(runtime)
+
+
+@router.put("/repositories", dependencies=[AdminOnly])
+def update_repositories(configuration: RepositoryCatalogInput, runtime: Runtime) -> dict:
+    try:
+        runtime.catalog.replace(configuration.model_dump())
+    except RepositoryCatalogError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _repository_catalog(runtime)

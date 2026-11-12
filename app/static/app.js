@@ -3,11 +3,12 @@
  * 结构：
  *   1. 工具函数（DOM、请求、格式化）
  *   2. 管理员登录态
- *   3. 页面路由（#reviews / #stats / #models / #scope）
+ *   3. 页面路由（#reviews / #stats / #repos / #models / #scope）
  *   4. 检视记录列表 + 详情抽屉（概览 / 意见 / 推理过程，SSE 实时推送）
- *   5. 数据统计
- *   6. 模型路由配置
- *   7. 检视范围配置
+ *   5. 数据统计（SVG 图表：趋势、环形图、表内比例条）
+ *   6. 代码仓管理（隐藏、分组）
+ *   7. 模型路由配置
+ *   8. 检视范围配置
  */
 (() => {
   "use strict";
@@ -130,6 +131,7 @@
     renderRecords();
     renderModels();
     renderScope();
+    renderRepos();
   }
 
   async function refreshAuth() {
@@ -187,7 +189,7 @@
 
   // ==================== 3. 页面路由 ====================
 
-  const PAGES = { reviews: "检视记录", stats: "数据统计", models: "模型路由", scope: "检视范围" };
+  const PAGES = { reviews: "检视记录", stats: "数据统计", repos: "代码仓", models: "模型路由", scope: "检视范围" };
   let currentPage = "reviews";
 
   function route() {
@@ -199,6 +201,7 @@
     document.title = `${PAGES[currentPage]} · XKL 代码检视平台`;
     if (currentPage === "reviews") loadReviews();
     if (currentPage === "stats") loadStats();
+    if (currentPage === "repos") loadRepos();
     if (currentPage === "models") loadModels();
     if (currentPage === "scope") loadScope();
   }
@@ -450,17 +453,14 @@
     }
   }
 
+  /** 检视意见 KPI：开发者回复分布的迷你环形图。 */
   async function loadReplyStats() {
     try {
-      const stats = await api("/api/stats/review-replies");
-      const total = stats.classification_total || 0;
-      $("reply-bar").innerHTML = total
-        ? REPLY_SEGMENTS.map((seg) => `<span style="width:${(stats[seg.key] / total) * 100}%;background:${seg.color}" title="${seg.label} ${stats[seg.key]}"></span>`).join("")
-        : "";
-      $("reply-legend").innerHTML = REPLY_SEGMENTS.map((seg) => {
-        const ratio = (total ? (stats[seg.key] / total) * 100 : 0).toFixed(1);  // 保留 1 位小数
-        return `<span><i style="background:${seg.color}"></i>${seg.label}<b>${formatNumber(stats[seg.key])}</b> · ${ratio}%</span>`;
-      }).join("");
+      const replies = await api("/api/stats/review-replies");
+      const segments = REPLY_SEGMENTS.map((seg) => ({ ...seg, value: replies[seg.key] || 0 }));
+      const total = replies.classification_total || 0;
+      $("kpi-reply-sub").textContent = `已解决 ${percent(replies.resolved, total)}`;
+      $("reply-donut").innerHTML = `${donutSvg(segments, { size: 68, stroke: 10 })}${legendHtml(segments, { compact: true })}`;
     } catch {
       /* 统计失败时保持上次结果 */
     }
@@ -727,51 +727,508 @@
 
   // ==================== 5. 数据统计 ====================
 
-  async function loadStats() {
+  // ---------- 图表工具（纯 SVG，无第三方依赖；悬停提示统一读取 data-tip）
+  const SERIES_COLORS = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)", "var(--c7)", "var(--c8)"];
+  const SEVERITY_SEGMENTS = [
+    { key: "major", label: "严重", color: "var(--danger)" },
+    { key: "minor", label: "一般", color: "var(--warning)" },
+    { key: "suggestion", label: "建议", color: "var(--info)" },
+  ];
+
+  /** 大数字的紧凑写法：1.2万、3.45亿。 */
+  function formatCompact(value) {
+    const n = Number(value || 0);
+    if (n >= 1e8) return `${(n / 1e8).toFixed(2)}亿`;
+    if (n >= 1e4) return `${(n / 1e4).toFixed(1)}万`;
+    return formatNumber(n);
+  }
+
+  function percent(part, total) {
+    return total ? `${((part / total) * 100).toFixed(1)}%` : "—";  // 保留 1 位小数
+  }
+
+  /** 环形图：segments = [{ label, value, color }]；相邻扇区之间留 2px 间隙。 */
+  function donutSvg(segments, { size = 132, stroke = 16, center = "", caption = "" } = {}) {
+    const half = size / 2;
+    const r = (size - stroke) / 2;
+    const circumference = 2 * Math.PI * r;
+    const total = segments.reduce((sum, seg) => sum + seg.value, 0);
+    const visible = segments.filter((seg) => seg.value > 0);
+    const gap = visible.length > 1 ? 2 : 0;
+    let offset = 0;
+    const arcs = visible.map((seg) => {
+      const length = (seg.value / total) * circumference;
+      const tip = `${seg.label}\n${formatNumber(seg.value)} · ${percent(seg.value, total)}`;
+      const arc = `<circle class="arc" cx="${half}" cy="${half}" r="${r}" fill="none" stroke="${seg.color}" stroke-width="${stroke}"
+        stroke-dasharray="${Math.max(0.5, length - gap)} ${circumference}" stroke-dashoffset="${-offset}" data-tip="${escapeHtml(tip)}" />`;
+      offset += length;
+      return arc;
+    }).join("");
+    return `<svg class="viz donut" viewBox="0 0 ${size} ${size}" style="width:${size}px;height:${size}px" role="img">
+      <circle cx="${half}" cy="${half}" r="${r}" fill="none" stroke="var(--track)" stroke-width="${stroke}" />
+      <g transform="rotate(-90 ${half} ${half})">${arcs}</g>
+      ${center ? `<text x="${half}" y="${half - (caption ? 2 : -6)}" text-anchor="middle" class="donut-value">${escapeHtml(center)}</text>` : ""}
+      ${caption ? `<text x="${half}" y="${half + 16}" text-anchor="middle" class="donut-caption">${escapeHtml(caption)}</text>` : ""}
+    </svg>`;
+  }
+
+  function legendHtml(segments, { compact = false } = {}) {
+    const total = segments.reduce((sum, seg) => sum + seg.value, 0);
+    return `<ul class="legend-list${compact ? " compact" : ""}">${segments.map((seg) => `<li>
+      <i style="background:${seg.color}"></i><span class="legend-label">${escapeHtml(seg.label)}</span>
+      <b title="${formatNumber(seg.value)}">${formatCompact(seg.value)}</b>${compact ? "" : `<em>${percent(seg.value, total)}</em>`}
+    </li>`).join("")}</ul>`;
+  }
+
+  function donutBlock(title, segments, options = {}) {
+    const total = segments.reduce((sum, seg) => sum + seg.value, 0);
+    return `<h3>${escapeHtml(title)}</h3>
+      ${total ? `<div class="donut-body">${donutSvg(segments, { center: formatCompact(total), caption: options.caption || "合计" })}${legendHtml(segments)}</div>`
+        : '<div class="empty small">暂无数据</div>'}`;
+  }
+
+  /** 表格单元格内的比例条。 */
+  function cellBar(value, max, color = "var(--c1)", text = formatNumber(value)) {
+    const width = max ? Math.max(value ? 2 : 0, (value / max) * 100) : 0;
+    return `<div class="cell-bar"><span class="cell-track"><span style="width:${width}%;background:${color}"></span></span><b>${text}</b></div>`;
+  }
+
+  /** 严重 / 一般 / 建议 的迷你堆叠条。 */
+  function severityStack(severity) {
+    const total = SEVERITY_SEGMENTS.reduce((sum, seg) => sum + (severity[seg.key] || 0), 0);
+    const tip = SEVERITY_SEGMENTS.map((seg) => `${seg.label} ${severity[seg.key] || 0}`).join("\n");
+    const parts = total
+      ? SEVERITY_SEGMENTS.filter((seg) => severity[seg.key]).map((seg) => `<span style="flex:${severity[seg.key]};background:${seg.color}"></span>`).join("")
+      : "";
+    return `<div class="sev-stack" data-tip="${escapeHtml(tip)}"><span class="sev-track">${parts}</span>
+      <span class="sev-nums">${SEVERITY_SEGMENTS.map((seg) => severity[seg.key] || 0).join(" / ")}</span></div>`;
+  }
+
+  /** 刻度：把最大值向上取整到 1/2/5×10^n 的 4 等分。 */
+  function niceMax(value) {
+    if (value <= 4) return 4;
+    const step = value / 4;
+    const power = 10 ** Math.floor(Math.log10(step));
+    const nice = [1, 2, 5, 10].find((m) => m * power >= step) * power;
+    return nice * 4;
+  }
+
+  /** 每日趋势：检视次数（面积 + 折线）与意见数（折线），共用一个纵轴。 */
+  function trendSvg(days, width, height = 240) {
+    const pad = { top: 12, right: 12, bottom: 26, left: 40 };
+    const plotW = Math.max(10, width - pad.left - pad.right);
+    const plotH = height - pad.top - pad.bottom;
+    const max = niceMax(Math.max(0, ...days.map((d) => Math.max(d.reviews, d.findings))));
+    const step = days.length > 1 ? plotW / (days.length - 1) : 0;
+    const x = (i) => pad.left + (days.length > 1 ? i * step : plotW / 2);
+    const y = (v) => pad.top + plotH - (v / max) * plotH;
+    const grid = [0, 1, 2, 3, 4].map((i) => {
+      const value = (max / 4) * i;
+      return `<line class="grid" x1="${pad.left}" x2="${width - pad.right}" y1="${y(value)}" y2="${y(value)}" />
+        <text class="axis" x="${pad.left - 8}" y="${y(value) + 4}" text-anchor="end">${formatCompact(value)}</text>`;
+    }).join("");
+    const labelEvery = Math.max(1, Math.ceil(days.length / Math.max(2, Math.floor(plotW / 64))));
+    const labels = days.map((d, i) => (i % labelEvery === 0 || i === days.length - 1) && (i === days.length - 1 || days.length - 1 - i >= labelEvery / 2)
+      ? `<text class="axis" x="${x(i)}" y="${height - 6}" text-anchor="middle">${d.day.slice(5)}</text>` : "").join("");
+    const path = (key) => days.map((d, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(d[key]).toFixed(1)}`).join("");
+    const area = days.length > 1 ? `${path("reviews")}L${x(days.length - 1)},${y(0)}L${x(0)},${y(0)}Z` : "";
+    const dots = days.length <= 31
+      ? days.map((d, i) => `<circle class="dot" cx="${x(i)}" cy="${y(d.reviews)}" r="3" fill="var(--c1)" />
+          <circle class="dot" cx="${x(i)}" cy="${y(d.findings)}" r="3" fill="var(--c2)" />`).join("")
+      : "";
+    const hitW = days.length > 1 ? step : plotW;
+    const hits = days.map((d, i) => `<rect class="hit" x="${x(i) - hitW / 2}" y="${pad.top}" width="${hitW}" height="${plotH}"
+      data-tip="${escapeHtml(`${d.day}\n检视 ${formatNumber(d.reviews)} 次\n意见 ${formatNumber(d.findings)} 条\nToken ${formatCompact(d.tokens)}`)}" />`).join("");
+    return `<svg class="viz" viewBox="0 0 ${width} ${height}" style="width:${width}px;height:${height}px" role="img" aria-label="检视趋势">
+      ${grid}${labels}
+      ${area ? `<path d="${area}" fill="var(--c1)" fill-opacity="0.10" />` : ""}
+      <path d="${path("reviews")}" fill="none" stroke="var(--c1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+      <path d="${path("findings")}" fill="none" stroke="var(--c2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+      ${dots}${hits}
+    </svg>`;
+  }
+
+  // 悬停提示：任何带 data-tip 的图表元素
+  const tip = $("chart-tip");
+  document.addEventListener("mousemove", (event) => {
+    const target = event.target.closest ? event.target.closest("[data-tip]") : null;
+    if (!target) {
+      tip.hidden = true;
+      return;
+    }
+    tip.innerHTML = escapeHtml(target.getAttribute("data-tip")).replace(/\n/g, "<br>");
+    tip.hidden = false;
+    const { innerWidth, innerHeight } = window;
+    const left = Math.min(event.clientX + 14, innerWidth - tip.offsetWidth - 8);
+    const top = event.clientY + 14 + tip.offsetHeight > innerHeight ? event.clientY - tip.offsetHeight - 10 : event.clientY + 14;
+    tip.style.left = `${Math.max(8, left)}px`;
+    tip.style.top = `${Math.max(8, top)}px`;
+  });
+
+  // ---------- 统计页
+  const STATS_KEY = "stats_filters";
+  const stats = { range: "30d", scope: "", data: null, catalog: null, sort: { key: "finding_count", dir: -1 } };
+  try {
+    const saved = JSON.parse(localStorage.getItem(STATS_KEY) || "{}");
+    if (["7d", "30d", "90d", "all"].includes(saved.range)) stats.range = saved.range;
+    if (typeof saved.scope === "string") stats.scope = saved.scope;
+    if (saved.sort && typeof saved.sort.key === "string") stats.sort = { key: saved.sort.key, dir: saved.sort.dir > 0 ? 1 : -1 };
+  } catch {
+    /* 本地存储不可用时使用默认值 */
+  }
+
+  function saveStatsFilters() {
     try {
-      const [reviews, tokens] = await Promise.all([api("/api/reviews?page_size=30"), api("/api/stats/tokens?limit=200")]);
-      renderRepoChart(reviews.summary);
-      renderTokens(tokens);
+      localStorage.setItem(STATS_KEY, JSON.stringify({ range: stats.range, scope: stats.scope, sort: stats.sort }));
+    } catch {
+      /* 忽略 */
+    }
+  }
+
+  /** 统计维度：""=全部，"g:分组名"，"r:代码仓"。 */
+  function statsQuery() {
+    const params = new URLSearchParams({ range: stats.range });
+    if (stats.scope.startsWith("g:")) params.set("group", stats.scope.slice(2));
+    if (stats.scope.startsWith("r:")) params.set("repository", stats.scope.slice(2));
+    return params;
+  }
+
+  function renderScopeSelect() {
+    const catalog = stats.catalog;
+    const visible = catalog.repositories.filter((repo) => !repo.hidden).map((repo) => repo.name).sort((a, b) => a.localeCompare(b));
+    const option = (value, label) => `<option value="${escapeHtml(value)}"${value === stats.scope ? " selected" : ""}>${escapeHtml(label)}</option>`;
+    const groups = catalog.groups.map((group) => option(`g:${group.name}`, `${group.name}（${group.repositories.length}）`));
+    if (catalog.groups.length) groups.push(option("g:__ungrouped__", "未分组"));
+    $("stats-scope").innerHTML = option("", "全部代码仓")
+      + (groups.length ? `<optgroup label="分组">${groups.join("")}</optgroup>` : "")
+      + (visible.length ? `<optgroup label="代码仓">${visible.map((name) => option(`r:${name}`, name)).join("")}</optgroup>` : "");
+  }
+
+  let statsRequest = 0;
+  async function loadStats() {
+    const requestId = ++statsRequest;
+    try {
+      stats.catalog = await api("/api/settings/repositories");
+      const valid = stats.scope === "" || stats.scope === "g:__ungrouped__"
+        || stats.catalog.groups.some((group) => stats.scope === `g:${group.name}`)
+        || stats.catalog.repositories.some((repo) => !repo.hidden && stats.scope === `r:${repo.name}`);
+      if (!valid) stats.scope = "";
+      renderScopeSelect();
+      document.querySelectorAll("#stats-range button").forEach((button) => button.classList.toggle("on", button.dataset.range === stats.range));
+      const data = await api(`/api/stats/overview?${statsQuery()}`);
+      if (requestId !== statsRequest) return;
+      stats.data = data;
+      renderStats();
     } catch (error) {
       toast(`加载统计失败：${error.message}`);
     }
   }
 
-  function renderRepoChart(summary) {
-    const rows = summary.repository_stats;
-    const max = Math.max(1, ...rows.map((row) => row.findings));
-    $("repo-chart-total").textContent = `${summary.repository_count} 个代码仓 · ${formatNumber(summary.finding_count)} 条意见`;
-    $("repo-chart").innerHTML = rows.length
-      ? rows.map((row) => `<div class="bar-row" title="${escapeHtml(row.name)}：${row.count} 次检视">
-          <span class="name">${escapeHtml(row.name)}</span>
-          <div class="bar-track"><div class="bar-fill" style="width:${(row.findings / max) * 100}%"></div></div>
-          <span class="value">${formatNumber(row.findings)}</span>
-        </div>`).join("")
+  function renderStats() {
+    const data = stats.data;
+    if (!data) return;
+    const t = data.totals;
+    $("stats-period").textContent = `${data.range.since_day} 至 ${data.range.today}`;
+    $("stat-reviews").textContent = formatNumber(t.review_count);
+    $("stat-reviews-sub").textContent = `${formatNumber(t.mr_count)} 个 MR · 已忽略 ${formatNumber(t.ignored_count)}`;
+    $("stat-findings").textContent = formatNumber(t.finding_count);
+    $("stat-findings-sub").textContent = t.success_count ? `平均每次 ${(t.finding_count / t.success_count).toFixed(1)} 条` : "—";
+    const finished = t.success_count + t.failed_count;
+    $("stat-success").textContent = percent(t.success_count, finished);
+    $("stat-success-sub").textContent = `成功 ${formatNumber(t.success_count)} · 失败 ${formatNumber(t.failed_count)}`;
+    $("stat-repos").textContent = formatNumber(t.repository_count);
+    $("stat-repos-sub").textContent = stats.catalog.groups.length ? `共 ${stats.catalog.groups.length} 个分组` : "未设置分组";
+    $("stat-tokens").textContent = formatCompact(t.total_tokens);
+    $("stat-tokens").title = formatNumber(t.total_tokens);
+    $("stat-tokens-sub").textContent = `入 ${formatCompact(t.input_tokens)} · 出 ${formatCompact(t.output_tokens)}`;
+    $("stat-tokens-sub").title = `输入 ${formatNumber(t.input_tokens)} · 输出 ${formatNumber(t.output_tokens)} · 缓存输入 ${formatNumber(t.cached_input_tokens)}`;
+    $("stat-avg-tokens").textContent = formatCompact(t.avg_tokens);
+    $("stat-avg-sub").textContent = t.avg_duration ? `平均耗时 ${t.avg_duration}s` : "—";
+
+    $("trend-legend").innerHTML = '<span><i style="background:var(--c1)"></i>检视次数</span><span><i style="background:var(--c2)"></i>检视意见</span>';
+    $("severity-chart").innerHTML = donutBlock("严重级别", SEVERITY_SEGMENTS.map((seg) => ({ ...seg, value: data.severity[seg.key] || 0 })), { caption: "条意见" });
+    $("reply-chart").innerHTML = donutBlock("开发者回复", REPLY_SEGMENTS.map((seg) => ({ ...seg, value: data.replies[seg.key] || 0 })), { caption: "条分类" });
+    renderTrend();  // 在环形图之后绘制：趋势图高度跟随同一行卡片
+    renderGroupTable();
+    renderRepoTable();
+    renderModelStats();
+  }
+
+  /** 补齐区间内没有检视的日期。 */
+  function filledDays() {
+    const byDay = new Map(stats.data.trend.map((d) => [d.day, d]));
+    const days = [];
+    const end = new Date(`${stats.data.range.today}T00:00:00Z`);
+    for (let d = new Date(`${stats.data.range.since_day}T00:00:00Z`); d <= end && days.length < 3660; d.setUTCDate(d.getUTCDate() + 1)) {
+      const day = d.toISOString().slice(0, 10);
+      days.push(byDay.get(day) || { day, reviews: 0, findings: 0, tokens: 0 });
+    }
+    return days;
+  }
+
+  function renderTrend() {
+    if (!stats.data) return;
+    const box = $("trend-chart");
+    box.innerHTML = stats.data.totals.review_count
+      ? trendSvg(filledDays(), box.clientWidth || 720, Math.max(240, box.clientHeight))
       : '<div class="empty">暂无数据</div>';
   }
 
-  function renderTokens(data) {
-    const s = data.summary;
-    $("token-reviews").textContent = formatNumber(s.review_count);
-    $("token-mrs").textContent = formatNumber(s.mr_count);
-    $("token-input").textContent = formatNumber(s.input_tokens);
-    $("token-output").textContent = formatNumber(s.output_tokens);
-    $("token-total").textContent = formatNumber(s.total_tokens);
-    $("token-avg").textContent = formatNumber(Math.round(s.avg_total_tokens));
-    $("token-rows").innerHTML = data.items.length
-      ? data.items.map((task) => `<tr>
-          <td>${formatTime(task.created_at)}</td>
-          <td>${escapeHtml(task.repository_name)} ${taskRef(task)}</td>
-          <td class="title" title="${escapeHtml(task.title)}">${escapeHtml(task.title)}</td>
-          <td class="num">${formatNumber(task.token_input)}</td>
-          <td class="num">${formatNumber(task.token_output)}</td>
-          <td class="num">${formatNumber(task.token_cached_input)}</td>
-          <td class="num">${formatNumber(task.token_input + task.token_output)}</td>
-        </tr>`).join("")
-      : '<tr><td colspan="7" class="empty">暂无 Token 记录</td></tr>';
+  function resolvedRate(replies) {
+    return replies.classification_total ? replies.resolved / replies.classification_total : -1;
   }
 
-  // ==================== 6. 模型路由 ====================
+  function renderGroupTable() {
+    const groups = stats.data.groups;
+    $("group-card").hidden = stats.scope !== "" || !groups.length;
+    const maxFindings = Math.max(0, ...groups.map((g) => g.finding_count));
+    const maxTokens = Math.max(0, ...groups.map((g) => g.total_tokens));
+    $("group-rows").innerHTML = groups.map((g, i) => `<tr>
+      <td><button class="link-btn" type="button" data-scope="g:${escapeHtml(g.key || g.name)}"><i class="swatch" style="background:${SERIES_COLORS[i % 8]}"></i>${escapeHtml(g.name)}</button></td>
+      <td class="num">${formatNumber(g.repository_count)}</td>
+      <td class="num">${formatNumber(g.review_count)}</td>
+      <td>${cellBar(g.finding_count, maxFindings, "var(--c1)")}</td>
+      <td class="num">${g.replies.classification_total ? percent(g.replies.resolved, g.replies.classification_total) : "—"}</td>
+      <td class="muted-cell">${formatCompact(g.input_tokens)} / ${formatCompact(g.output_tokens)}</td>
+      <td>${cellBar(g.total_tokens, maxTokens, "var(--c7)", formatCompact(g.total_tokens))}</td>
+    </tr>`).join("");
+  }
+
+  function renderRepoTable() {
+    const rows = stats.data.repositories.map((row) => ({ ...row, resolved_rate: resolvedRate(row.replies), group: row.group || "" }));
+    const { key, dir } = stats.sort;
+    rows.sort((a, b) => {
+      const va = a[key];
+      const vb = b[key];
+      const cmp = typeof va === "string" ? va.localeCompare(vb) : va - vb;
+      return cmp * dir || a.name.localeCompare(b.name);
+    });
+    document.querySelectorAll("#repo-head th[data-sort]").forEach((th) => {
+      th.classList.toggle("sorted", th.dataset.sort === key);
+      th.dataset.dir = th.dataset.sort === key ? (dir > 0 ? "asc" : "desc") : "";
+    });
+    const maxFindings = Math.max(0, ...rows.map((r) => r.finding_count));
+    const maxTokens = Math.max(0, ...rows.map((r) => r.total_tokens));
+    $("repo-table-total").textContent = `${rows.length} 个代码仓`;
+    $("repo-rows").innerHTML = rows.length
+      ? rows.map((r) => `<tr>
+          <td><button class="link-btn" type="button" data-scope="r:${escapeHtml(r.name)}" title="查看 ${escapeHtml(r.name)} 的统计">${escapeHtml(r.name)}</button></td>
+          <td>${r.group ? `<span class="group-pill">${escapeHtml(r.group)}</span>` : '<span class="muted-cell">—</span>'}</td>
+          <td class="num">${formatNumber(r.review_count)}</td>
+          <td>${cellBar(r.finding_count, maxFindings, "var(--c1)")}</td>
+          <td>${severityStack(r.severity)}</td>
+          <td class="num">${r.resolved_rate < 0 ? "—" : percent(r.replies.resolved, r.replies.classification_total)}</td>
+          <td class="num" title="缓存输入 ${formatNumber(r.cached_input_tokens)}">${formatCompact(r.input_tokens)}</td>
+          <td class="num">${formatCompact(r.output_tokens)}</td>
+          <td>${cellBar(r.total_tokens, maxTokens, "var(--c7)", formatCompact(r.total_tokens))}</td>
+        </tr>`).join("")
+      : '<tr><td colspan="9" class="empty">暂无数据</td></tr>';
+  }
+
+  function renderModelStats() {
+    const models = stats.data.models;
+    // 颜色跟随模型名称（按名称固定排序），不随排名变化
+    const names = [...models.map((m) => m.name)].sort((a, b) => a.localeCompare(b));
+    const colorOf = (name) => (names.indexOf(name) < SERIES_COLORS.length ? SERIES_COLORS[names.indexOf(name)] : "var(--text-3)");
+    const ranked = [...models].sort((a, b) => b.total_tokens - a.total_tokens);
+    const segments = ranked.slice(0, 7).map((m) => ({ label: m.name, value: m.total_tokens, color: colorOf(m.name) }));
+    const rest = ranked.slice(7).reduce((sum, m) => sum + m.total_tokens, 0);
+    if (rest) segments.push({ label: "其他", value: rest, color: "var(--text-3)" });
+    $("model-chart").innerHTML = donutBlock("Token 占比", segments, { caption: "Token" });
+    $("model-rows").innerHTML = models.length
+      ? models.map((m) => {
+          const rate = m.call_count ? m.success_count / m.call_count : 0;
+          const level = rate >= 0.95 ? "success" : rate >= 0.8 ? "warning" : "danger";
+          return `<tr>
+            <td><i class="swatch" style="background:${colorOf(m.name)}"></i>${escapeHtml(m.name)}</td>
+            <td class="num">${formatNumber(m.call_count)}</td>
+            <td class="num"><span class="rate rate-${level}" title="失败 ${formatNumber(m.failed_count)} 次">${percent(m.success_count, m.call_count)}</span></td>
+            <td class="num">${formatNumber(m.review_count)}</td>
+            <td class="num">${formatNumber(m.finding_count)}</td>
+            <td class="num" title="缓存输入 ${formatNumber(m.cached_input_tokens)}">${formatCompact(m.input_tokens)}</td>
+            <td class="num">${formatCompact(m.output_tokens)}</td>
+            <td class="num">${m.avg_duration ? `${m.avg_duration}s` : "—"}</td>
+          </tr>`;
+        }).join("")
+      : '<tr><td colspan="8" class="empty">暂无模型调用记录</td></tr>';
+  }
+
+  $("stats-range").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-range]");
+    if (!button) return;
+    stats.range = button.dataset.range;
+    saveStatsFilters();
+    loadStats();
+  });
+  $("stats-scope").addEventListener("change", () => {
+    stats.scope = $("stats-scope").value;
+    saveStatsFilters();
+    loadStats();
+  });
+  $("page-stats").addEventListener("click", (event) => {
+    const link = event.target.closest("[data-scope]");
+    if (link) {
+      stats.scope = link.dataset.scope;
+      saveStatsFilters();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return loadStats();
+    }
+    const th = event.target.closest("#repo-head th[data-sort]");
+    if (th) {
+      const key = th.dataset.sort;
+      stats.sort = { key, dir: stats.sort.key === key ? -stats.sort.dir : (key === "name" || key === "group" ? 1 : -1) };
+      saveStatsFilters();
+      renderRepoTable();
+    }
+  });
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (currentPage === "stats") renderTrend(); }, 150);
+  });
+
+  // ==================== 6. 代码仓管理 ====================
+
+  const repos = { items: [], hidden: new Set(), groups: [], loaded: false, dirty: false };
+
+  async function loadRepos() {
+    if (repos.dirty) return renderRepos();
+    try {
+      const data = await api("/api/settings/repositories");
+      applyRepoCatalog(data);
+      $("repos-status").textContent = `共 ${repos.items.length} 个代码仓 · ${repos.hidden.size} 个已隐藏`;
+    } catch (error) {
+      $("repos-status").textContent = `加载失败：${error.message}`;
+    }
+  }
+
+  function applyRepoCatalog(data) {
+    repos.items = data.repositories;
+    repos.hidden = new Set(data.hidden);
+    repos.groups = data.groups.map((group) => ({ name: group.name, repositories: [...group.repositories] }));
+    repos.loaded = true;
+    repos.dirty = false;
+    renderRepos();
+  }
+
+  function repoGroup(name) {
+    return repos.groups.find((group) => group.repositories.includes(name))?.name || "";
+  }
+
+  function renderRepos() {
+    if (!repos.loaded) return;
+    const editable = auth.admin;
+    $("repos-readonly").hidden = editable;
+    $("group-actions").hidden = !editable;
+    $("repos-save").hidden = !editable;
+    $("group-list").innerHTML = repos.groups.map((group, index) => `<span class="tag group-tag" data-index="${index}">
+        <i class="swatch" style="background:${SERIES_COLORS[index % 8]}"></i>${escapeHtml(group.name)}<em>${group.repositories.length}</em>
+        ${editable ? `<button type="button" data-group-action="rename" title="重命名" aria-label="重命名">✎</button><button type="button" data-group-action="remove" title="删除分组" aria-label="删除分组">×</button>` : ""}
+      </span>`).join("") || '<span class="muted-cell">还没有分组</span>';
+
+    const keyword = $("repos-search").value.trim().toLowerCase();
+    const filter = $("repos-filter").value;
+    const rows = repos.items.filter((repo) => {
+      if (keyword && !repo.name.toLowerCase().includes(keyword)) return false;
+      const hidden = repos.hidden.has(repo.name);
+      if (filter === "visible") return !hidden;
+      if (filter === "hidden") return hidden;
+      if (filter === "ungrouped") return !repoGroup(repo.name);
+      return true;
+    });
+    $("repos-count").textContent = `${rows.length} / ${repos.items.length}`;
+    const groupOptions = (current) => `<option value="">未分组</option>${repos.groups.map((group) => `<option value="${escapeHtml(group.name)}"${group.name === current ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}`;
+    $("repos-rows").innerHTML = rows.length
+      ? rows.map((repo) => {
+          const hidden = repos.hidden.has(repo.name);
+          const group = repoGroup(repo.name);
+          return `<tr class="${hidden ? "is-hidden" : ""}" data-repo="${escapeHtml(repo.name)}">
+            <td class="repo-name">${escapeHtml(repo.name)}</td>
+            <td class="num">${formatNumber(repo.review_count)}</td>
+            <td>${formatTime(repo.latest_at)}</td>
+            <td>${editable ? `<select class="select-sm" data-repo-action="group" aria-label="分组">${groupOptions(group)}</select>` : (group ? `<span class="group-pill">${escapeHtml(group)}</span>` : "—")}</td>
+            <td>${editable
+              ? `<button class="toggle${hidden ? "" : " on"}" type="button" data-repo-action="toggle" role="switch" aria-checked="${!hidden}"><span></span>${hidden ? "已隐藏" : "显示中"}</button>`
+              : (hidden ? '<span class="badge status-ignored">已隐藏</span>' : '<span class="badge status-success">显示中</span>')}</td>
+          </tr>`;
+        }).join("")
+      : '<tr><td colspan="5" class="empty">没有符合条件的代码仓</td></tr>';
+  }
+
+  function markReposDirty() {
+    repos.dirty = true;
+    $("repos-status").textContent = "有未保存的修改";
+    renderRepos();
+  }
+
+  function addGroup() {
+    if (!requireAdmin()) return;
+    const name = $("group-input").value.trim();
+    if (!name) return toast("请输入分组名称");
+    if (repos.groups.some((group) => group.name === name)) return toast("分组名称已存在");
+    repos.groups.push({ name, repositories: [] });
+    $("group-input").value = "";
+    markReposDirty();
+  }
+
+  $("group-add").addEventListener("click", addGroup);
+  $("group-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addGroup();
+    }
+  });
+  $("group-list").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-group-action]");
+    if (!button || !requireAdmin()) return;
+    const group = repos.groups[Number(button.closest(".group-tag").dataset.index)];
+    if (button.dataset.groupAction === "remove") {
+      if (!confirm(`删除分组“${group.name}”？其中的代码仓将变为未分组。`)) return;
+      repos.groups.splice(repos.groups.indexOf(group), 1);
+    } else {
+      const name = (prompt("新的分组名称", group.name) || "").trim();
+      if (!name || name === group.name) return;
+      if (repos.groups.some((other) => other.name === name)) return toast("分组名称已存在");
+      group.name = name;
+    }
+    markReposDirty();
+  });
+  $("repos-rows").addEventListener("click", (event) => {
+    const button = event.target.closest('[data-repo-action="toggle"]');
+    if (!button || !requireAdmin()) return;
+    const name = button.closest("tr").dataset.repo;
+    if (repos.hidden.has(name)) repos.hidden.delete(name);
+    else repos.hidden.add(name);
+    markReposDirty();
+  });
+  $("repos-rows").addEventListener("change", (event) => {
+    const select = event.target.closest('[data-repo-action="group"]');
+    if (!select || !requireAdmin()) return;
+    const name = select.closest("tr").dataset.repo;
+    for (const group of repos.groups) group.repositories = group.repositories.filter((repo) => repo !== name);
+    repos.groups.find((group) => group.name === select.value)?.repositories.push(name);
+    markReposDirty();
+  });
+  $("repos-search").addEventListener("input", renderRepos);
+  $("repos-filter").addEventListener("change", renderRepos);
+  $("repos-save").addEventListener("click", async () => {
+    if (!requireAdmin()) return;
+    try {
+      const data = await api("/api/settings/repositories", {
+        method: "PUT",
+        body: { hidden: [...repos.hidden], groups: repos.groups },
+      });
+      applyRepoCatalog(data);
+      $("repos-status").textContent = `已保存 · ${repos.hidden.size} 个已隐藏 · ${repos.groups.length} 个分组`;
+      loadFilterOptions();
+      loadReplyStats();
+      toast("代码仓配置已保存并生效");
+    } catch (error) {
+      $("repos-status").textContent = `保存失败：${error.message}`;
+    }
+  });
+
+  // ==================== 7. 模型路由 ====================
 
   const models = { routes: [], defaultKey: null, efforts: [], envGateway: false, health: {}, loaded: false, dirty: false };
   let routeSeq = 0;
@@ -968,7 +1425,7 @@
     }
   });
 
-  // ==================== 7. 检视范围 ====================
+  // ==================== 8. 检视范围 ====================
 
   const scope = { rules: [], repositories: [], loaded: false, dirty: false };
 

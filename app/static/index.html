@@ -27,6 +27,9 @@
           <a href="#stats" data-page="stats">
             <svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7" /></svg>数据统计
           </a>
+          <a href="#repos" data-page="repos">
+            <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>代码仓
+          </a>
           <a href="#models" data-page="models">
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M5 19l3-3M16 8l3-3" /></svg>模型路由
           </a>
@@ -50,17 +53,19 @@
 
         <!-- 检视记录 -->
         <section class="page" id="page-reviews">
-          <div class="kpis">
+          <div class="kpis kpis-3">
             <div class="kpi">
               <span class="kpi-label">检视记录</span>
               <strong class="kpi-value" id="kpi-reviews">—</strong>
               <span class="kpi-sub" id="kpi-queue">队列 — · 执行中 —</span>
             </div>
-            <div class="kpi kpi-wide">
-              <span class="kpi-label">检视意见</span>
-              <strong class="kpi-value" id="kpi-findings">—</strong>
-              <div class="reply-bar" id="reply-bar" aria-label="意见回复分布"></div>
-              <div class="reply-legend" id="reply-legend"></div>
+            <div class="kpi kpi-split">
+              <div class="kpi-main">
+                <span class="kpi-label">检视意见</span>
+                <strong class="kpi-value" id="kpi-findings">—</strong>
+                <span class="kpi-sub" id="kpi-reply-sub">已解决 —</span>
+              </div>
+              <div class="chart mini-donut" id="reply-donut" aria-label="意见回复分布"></div>
             </div>
             <div class="kpi">
               <span class="kpi-label">代码仓</span>
@@ -111,26 +116,125 @@
 
         <!-- 数据统计 -->
         <section class="page" id="page-stats" hidden>
-          <div class="card">
-            <div class="card-head"><h2>各代码仓检视意见</h2><span class="muted" id="repo-chart-total"></span></div>
-            <div class="bar-chart" id="repo-chart"></div>
+          <div class="stats-toolbar">
+            <div class="segmented" id="stats-range" role="group" aria-label="时间范围">
+              <button type="button" data-range="7d">近 7 天</button>
+              <button type="button" data-range="30d">近 30 天</button>
+              <button type="button" data-range="90d">近 90 天</button>
+              <button type="button" data-range="all">全部</button>
+            </div>
+            <select id="stats-scope" aria-label="统计维度"></select>
+            <span class="stats-period" id="stats-period"></span>
           </div>
+
           <div class="kpis kpis-6">
-            <div class="kpi"><span class="kpi-label">纳入统计检视</span><strong class="kpi-value" id="token-reviews">—</strong></div>
-            <div class="kpi"><span class="kpi-label">纳入统计 MR</span><strong class="kpi-value" id="token-mrs">—</strong></div>
-            <div class="kpi"><span class="kpi-label">输入 Token</span><strong class="kpi-value" id="token-input">—</strong></div>
-            <div class="kpi"><span class="kpi-label">输出 Token</span><strong class="kpi-value" id="token-output">—</strong></div>
-            <div class="kpi"><span class="kpi-label">总 Token</span><strong class="kpi-value" id="token-total">—</strong></div>
-            <div class="kpi"><span class="kpi-label">平均每次</span><strong class="kpi-value" id="token-avg">—</strong></div>
+            <div class="kpi"><span class="kpi-label">检视次数</span><strong class="kpi-value" id="stat-reviews">—</strong><span class="kpi-sub" id="stat-reviews-sub">—</span></div>
+            <div class="kpi"><span class="kpi-label">检视意见</span><strong class="kpi-value" id="stat-findings">—</strong><span class="kpi-sub" id="stat-findings-sub">—</span></div>
+            <div class="kpi"><span class="kpi-label">成功率</span><strong class="kpi-value" id="stat-success">—</strong><span class="kpi-sub" id="stat-success-sub">—</span></div>
+            <div class="kpi"><span class="kpi-label">代码仓</span><strong class="kpi-value" id="stat-repos">—</strong><span class="kpi-sub" id="stat-repos-sub">—</span></div>
+            <div class="kpi"><span class="kpi-label">总 Token</span><strong class="kpi-value" id="stat-tokens">—</strong><span class="kpi-sub" id="stat-tokens-sub">—</span></div>
+            <div class="kpi"><span class="kpi-label">平均每次 Token</span><strong class="kpi-value" id="stat-avg-tokens">—</strong><span class="kpi-sub" id="stat-avg-sub">—</span></div>
           </div>
-          <div class="card">
-            <div class="card-head"><h2>Token 明细</h2><span class="muted">最近 200 次检视</span></div>
+
+          <div class="stats-grid">
+            <div class="card span-8">
+              <div class="card-head">
+                <div><h2>检视趋势</h2><p class="muted">每日检视次数与意见数（北京时间）</p></div>
+                <div class="legend" id="trend-legend"></div>
+              </div>
+              <div class="chart trend-chart" id="trend-chart"></div>
+            </div>
+            <div class="card span-4">
+              <div class="card-head"><div><h2>意见构成</h2><p class="muted">严重级别与开发者回复</p></div></div>
+              <div class="donut-pair">
+                <div class="chart donut-block" id="severity-chart"></div>
+                <div class="chart donut-block" id="reply-chart"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" id="group-card" hidden>
+            <div class="card-head"><div><h2>按分组</h2><p class="muted">点击分组名称可切换到该分组的统计</p></div></div>
             <div class="table-wrap">
               <table class="table">
-                <thead>
-                  <tr><th>检视时间</th><th>代码仓 · MR</th><th>标题</th><th class="num">输入</th><th class="num">输出</th><th class="num">缓存输入</th><th class="num">合计</th></tr>
-                </thead>
-                <tbody id="token-rows"></tbody>
+                <thead><tr><th>分组</th><th class="num">代码仓</th><th class="num">检视</th><th>检视意见</th><th class="num">已解决率</th><th>Token（输入 / 输出）</th><th class="num">合计 Token</th></tr></thead>
+                <tbody id="group-rows"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div><h2>代码仓明细</h2><p class="muted">检视意见、严重级别、回复与 Token 消耗按代码仓汇总；点击列头排序，点击代码仓查看其统计</p></div>
+              <span class="status-text" id="repo-table-total"></span>
+            </div>
+            <div class="table-wrap">
+              <table class="table sortable">
+                <thead id="repo-head"><tr>
+                  <th data-sort="name">代码仓</th><th data-sort="group">分组</th>
+                  <th class="num" data-sort="review_count">检视</th><th data-sort="finding_count">检视意见</th>
+                  <th>严重 / 一般 / 建议</th><th class="num" data-sort="resolved_rate">已解决率</th>
+                  <th class="num" data-sort="input_tokens">输入 Token</th><th class="num" data-sort="output_tokens">输出 Token</th>
+                  <th data-sort="total_tokens">合计 Token</th>
+                </tr></thead>
+                <tbody id="repo-rows"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><div><h2>模型</h2><p class="muted">每次模型调用（含故障切换前的失败调用）单独计数；Token 含检视与整体评价</p></div></div>
+            <div class="model-stats">
+              <div class="chart donut-block" id="model-chart"></div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th>模型</th><th class="num">调用次数</th><th class="num">成功率</th><th class="num">参与检视</th><th class="num">产出意见</th><th class="num">输入 Token</th><th class="num">输出 Token</th><th class="num">平均耗时</th></tr></thead>
+                  <tbody id="model-rows"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 代码仓管理 -->
+        <section class="page" id="page-repos" hidden>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>代码仓管理</h2>
+                <p class="muted">隐藏的代码仓不再纳入数据统计，也不在检视记录中显示，但新的 MR 仍会照常检视与回写。代码仓可归入自定义分组，数据统计可按分组查看。</p>
+              </div>
+              <span class="status-text" id="repos-status"></span>
+            </div>
+            <p class="notice" id="repos-readonly" hidden>仅管理员可修改配置，请先登录。</p>
+            <div class="group-manager">
+              <h3>分组</h3>
+              <div class="tags" id="group-list"></div>
+              <div class="scope-add" id="group-actions">
+                <input id="group-input" type="text" maxlength="50" placeholder="输入分组名称，回车添加" />
+                <button class="btn btn-sm" id="group-add" type="button">添加分组</button>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="toolbar-inline">
+              <label class="field search">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
+                <input id="repos-search" type="search" placeholder="搜索代码仓" autocomplete="off" />
+              </label>
+              <select id="repos-filter" aria-label="显示范围">
+                <option value="all">全部代码仓</option>
+                <option value="visible">仅显示中</option>
+                <option value="hidden">仅已隐藏</option>
+                <option value="ungrouped">未分组</option>
+              </select>
+              <span class="status-text" id="repos-count"></span>
+              <button class="btn btn-primary" id="repos-save" type="button">保存并生效</button>
+            </div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th>代码仓</th><th class="num">检视次数</th><th>最近检视</th><th>分组</th><th>状态</th></tr></thead>
+                <tbody id="repos-rows"></tbody>
               </table>
             </div>
           </div>
@@ -212,6 +316,7 @@
     </div>
 
     <div class="toast" id="toast" hidden></div>
+    <div class="chart-tip" id="chart-tip" role="tooltip" hidden></div>
     <script src="/static/app.js"></script>
   </body>
 </html>

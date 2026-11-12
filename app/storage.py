@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS findings (
     comment_error TEXT,
     comment_retry_count INTEGER NOT NULL DEFAULT 0,
     comment_http_status INTEGER,
-    discussion_id TEXT
+    discussion_id TEXT,
+    model TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_findings_task ON findings(review_task_id);
 CREATE INDEX IF NOT EXISTS idx_findings_comment_status ON findings(status);
@@ -129,6 +130,23 @@ CREATE TABLE IF NOT EXISTS review_reply_events (
 );
 CREATE INDEX IF NOT EXISTS idx_review_reply_events_finding ON review_reply_events(finding_id);
 
+-- 每次模型调用（含失败）的用量，用于按模型统计
+CREATE TABLE IF NOT EXISTS model_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_task_id TEXT NOT NULL REFERENCES review_tasks(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'review',
+    success INTEGER NOT NULL DEFAULT 1,
+    call_count INTEGER NOT NULL DEFAULT 1,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    duration REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_model_calls_task ON model_calls(review_task_id);
+CREATE INDEX IF NOT EXISTS idx_model_calls_model ON model_calls(model);
+
 -- 旧版本的回复统计重建表已不再使用
 DROP TABLE IF EXISTS processed_note_events;
 DROP TABLE IF EXISTS review_reply_rebuild_progress;
@@ -158,6 +176,11 @@ _TASK_MIGRATIONS = {
     "evaluation_sent_at": "TEXT",
     "origin": "TEXT NOT NULL DEFAULT 'codehub'",
 }
+
+# 统计按北京时间划分自然日
+STATS_DAY_OFFSET = "+8 hours"
+# 历史任务按 models_used 回填 model_calls 的完成标记
+_BACKFILL_KEY = "model_calls_backfilled"
 
 # 创建任务时由调用方提供的字段
 TASK_INPUT_FIELDS = (
@@ -258,10 +281,59 @@ class Database:
             finding_columns = {row[1] for row in connection.execute("PRAGMA table_info(findings)")}
             if finding_columns and "discussion_id" not in finding_columns:
                 connection.execute("ALTER TABLE findings ADD COLUMN discussion_id TEXT")
+            if finding_columns and "model" not in finding_columns:
+                connection.execute("ALTER TABLE findings ADD COLUMN model TEXT NOT NULL DEFAULT ''")
             connection.executescript(_SCHEMA)
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_findings_discussion ON findings(discussion_id)"
             )
+            self._backfill_model_calls(connection)
+
+    @staticmethod
+    def _backfill_model_calls(connection: sqlite3.Connection) -> None:
+        """升级前的任务只记录了 models_used 与任务总用量：单模型任务全额归属，多模型任务均分。只执行一次。"""
+        if connection.execute("SELECT 1 FROM runtime_settings WHERE key = ?", (_BACKFILL_KEY,)).fetchone():
+            return
+        rows = connection.execute(
+            """
+            SELECT id, models_used, review_pass_count, token_input, token_output, token_cached_input,
+                   codex_duration, created_at
+            FROM review_tasks
+            WHERE models_used NOT IN ('', '[]') AND id NOT IN (SELECT review_task_id FROM model_calls)
+            """
+        ).fetchall()
+        for row in rows:
+            try:
+                models = [str(m) for m in json.loads(row["models_used"] or "[]") if str(m)]
+            except json.JSONDecodeError:
+                continue
+            if not models:
+                continue
+            n = len(models)
+
+            def share(total: int | float | None, index: int) -> int:
+                total = int(total or 0)
+                return total // n + (1 if index < total % n else 0)
+
+            for index, model in enumerate(models):
+                connection.execute(
+                    "INSERT INTO model_calls (review_task_id, model, kind, success, call_count, input_tokens, "
+                    "output_tokens, cached_input_tokens, duration, created_at) VALUES (?, ?, 'review', 1, ?, ?, ?, ?, ?, ?)",
+                    (
+                        row["id"], model, max(1, share(row["review_pass_count"], index)),
+                        share(row["token_input"], index), share(row["token_output"], index),
+                        share(row["token_cached_input"], index), float(row["codex_duration"] or 0) / n,
+                        row["created_at"],
+                    ),
+                )
+            if n == 1:
+                connection.execute(
+                    "UPDATE findings SET model = ? WHERE review_task_id = ? AND model = ''", (models[0], row["id"])
+                )
+        connection.execute(
+            "INSERT INTO runtime_settings (key, value, updated_at) VALUES (?, ?, ?)",
+            (_BACKFILL_KEY, str(len(rows)), _now()),
+        )
 
     def is_healthy(self) -> bool:
         row = self._one("SELECT 1")
@@ -371,9 +443,32 @@ class Database:
         return self._task(row) if row else None
 
     @staticmethod
-    def _filters(repository: str | None, author: str | None, statuses: list[str] | None) -> tuple[str, list[Any]]:
+    def _repository_scope(
+        column: str, include: list[str] | None, exclude: list[str] | None
+    ) -> tuple[list[str], list[Any]]:
+        """代码仓集合过滤：include 为精确白名单（空列表表示什么都不匹配），exclude 为隐藏的代码仓。"""
         clauses: list[str] = []
         params: list[Any] = []
+        if include is not None:
+            if not include:
+                clauses.append("0")
+            else:
+                clauses.append(f"{column} IN ({','.join('?' * len(include))})")
+                params.extend(include)
+        if exclude:
+            clauses.append(f"{column} NOT IN ({','.join('?' * len(exclude))})")
+            params.extend(exclude)
+        return clauses, params
+
+    @classmethod
+    def _filters(
+        cls,
+        repository: str | None,
+        author: str | None,
+        statuses: list[str] | None,
+        exclude: list[str] | None = None,
+    ) -> tuple[str, list[Any]]:
+        clauses, params = cls._repository_scope("repository_name", None, exclude)
         if repository:
             clauses.append("repository_name LIKE ? ESCAPE '\\' COLLATE NOCASE")
             params.append(_like(repository))
@@ -391,11 +486,12 @@ class Database:
         repository: str | None = None,
         author: str | None = None,
         statuses: list[str] | None = None,
+        exclude: list[str] | None = None,
         sort: str = "desc",
         limit: int = 120,
         offset: int = 0,
     ) -> list[ReviewTask]:
-        where, params = self._filters(repository, author, statuses)
+        where, params = self._filters(repository, author, statuses, exclude)
         order = "ASC" if sort == "asc" else "DESC"
         rows = self._all(
             f"SELECT * FROM review_tasks{where} ORDER BY created_at {order} LIMIT ? OFFSET ?",
@@ -404,10 +500,15 @@ class Database:
         return [self._task(row) for row in rows]
 
     def task_summary(
-        self, *, repository: str | None = None, author: str | None = None, statuses: list[str] | None = None
+        self,
+        *,
+        repository: str | None = None,
+        author: str | None = None,
+        statuses: list[str] | None = None,
+        exclude: list[str] | None = None,
     ) -> dict[str, Any]:
         """筛选条件下的总量与按代码仓的意见分布（不分页）。"""
-        where, params = self._filters(repository, author, statuses)
+        where, params = self._filters(repository, author, statuses, exclude)
         total = self._one(
             f"SELECT COUNT(*) AS reviews, COALESCE(SUM(finding_count), 0) AS findings FROM review_tasks{where}",
             params,
@@ -428,12 +529,14 @@ class Database:
             "repository_stats": [dict(row) for row in repositories],
         }
 
-    def repositories(self) -> list[dict[str, Any]]:
+    def repositories(self, *, exclude: list[str] | None = None) -> list[dict[str, Any]]:
+        where, params = self._filters(None, None, None, exclude)
         rows = self._all(
-            """
+            f"""
             SELECT repository_name AS name, COUNT(*) AS review_count, MAX(created_at) AS latest_at
-            FROM review_tasks GROUP BY repository_name ORDER BY latest_at DESC
-            """
+            FROM review_tasks{where} GROUP BY repository_name ORDER BY latest_at DESC
+            """,
+            params,
         )
         return [dict(row) for row in rows]
 
@@ -443,29 +546,187 @@ class Database:
         )
         return [row[0] for row in rows]
 
-    def token_usage_summary(self, *, limit: int | None = None) -> dict[str, Any]:
-        """Token 用量汇总；只统计有用量记录的任务。"""
-        has_usage = "WHERE token_input > 0 OR token_output > 0"
-        total = self._one(
+    # ------------------------------------------------------------------ 统计
+
+    def _stats_scope(
+        self, since: str | None, include: list[str] | None, exclude: list[str] | None
+    ) -> tuple[str, list[Any]]:
+        """统计范围（作用于别名 t 的 review_tasks）：创建时间下限 + 代码仓集合。"""
+        clauses, params = self._repository_scope("t.repository_name", include, exclude)
+        if since:
+            clauses.append("t.created_at >= ?")
+            params.append(since)
+        return (" AND ".join(clauses) or "1"), params
+
+    def _reply_breakdown(self, where: str, params: list[Any]) -> dict[str, dict[str, int]]:
+        """按代码仓的意见回复分布；没有任何回复的意见计为“已解决”。"""
+        result: dict[str, dict[str, int]] = {}
+
+        def bucket(name: str) -> dict[str, int]:
+            return result.setdefault(name, {category: 0 for category in REPLY_CATEGORIES} | {"finding_count": 0})
+
+        for row in self._all(
+            f"""
+            SELECT t.repository_name AS name, COUNT(*) AS findings,
+                   SUM(EXISTS (SELECT 1 FROM review_reply_events r WHERE r.finding_id = f.id)) AS replied
+            FROM findings f JOIN review_tasks t ON t.id = f.review_task_id
+            WHERE {where} GROUP BY t.repository_name
+            """,
+            params,
+        ):
+            item = bucket(row["name"])
+            item["finding_count"] = int(row["findings"])
+            item["resolved"] += int(row["findings"]) - int(row["replied"] or 0)
+        for row in self._all(
+            f"""
+            SELECT t.repository_name AS name, r.category AS category, COUNT(*) AS count
+            FROM review_reply_events r
+            JOIN findings f ON f.id = r.finding_id
+            JOIN review_tasks t ON t.id = f.review_task_id
+            WHERE {where} GROUP BY t.repository_name, r.category
+            """,
+            params,
+        ):
+            bucket(row["name"])[row["category"]] += int(row["count"])
+        for item in result.values():
+            item["classification_total"] = sum(item[category] for category in REPLY_CATEGORIES)
+        return result
+
+    @staticmethod
+    def _sum_replies(items: Iterable[dict[str, int]]) -> dict[str, int]:
+        keys = (*REPLY_CATEGORIES, "finding_count", "classification_total")
+        total = {key: 0 for key in keys}
+        for item in items:
+            for key in keys:
+                total[key] += item.get(key, 0)
+        return total
+
+    def stats_overview(
+        self,
+        *,
+        since: str | None = None,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """统计总览：总量、每日趋势、严重级别、回复分布、按代码仓与按模型的汇总。
+
+        since 为 UTC ISO 时间下限；include 为代码仓白名单（None 表示不限），exclude 为隐藏的代码仓。
+        """
+        where, params = self._stats_scope(since, include, exclude)
+        token_sum = "COALESCE(SUM(t.token_input), 0) AS input_tokens, COALESCE(SUM(t.token_output), 0) AS output_tokens, " \
+            "COALESCE(SUM(t.token_cached_input), 0) AS cached_input_tokens"
+        total = dict(self._one(
             f"""
             SELECT COUNT(*) AS review_count,
-                   COUNT(DISTINCT project_id || ':' || mr_iid) AS mr_count,
-                   COALESCE(SUM(token_input), 0) AS input_tokens,
-                   COALESCE(SUM(token_output), 0) AS output_tokens,
-                   COALESCE(SUM(token_cached_input), 0) AS cached_input_tokens
-            FROM review_tasks {has_usage}
-            """
+                   COUNT(DISTINCT CASE WHEN t.origin = 'codehub' THEN t.project_id || ':' || t.mr_iid END) AS mr_count,
+                   COALESCE(SUM(t.status = 'success'), 0) AS success_count,
+                   COALESCE(SUM(t.status = 'failed'), 0) AS failed_count,
+                   COALESCE(SUM(t.status = 'ignored'), 0) AS ignored_count,
+                   COALESCE(SUM(t.finding_count), 0) AS finding_count,
+                   COUNT(DISTINCT t.repository_name) AS repository_count,
+                   COALESCE(SUM(t.token_input > 0 OR t.token_output > 0), 0) AS token_review_count,
+                   AVG(CASE WHEN t.status = 'success' THEN t.codex_duration END) AS avg_duration,
+                   {token_sum}
+            FROM review_tasks t WHERE {where}
+            """,
+            params,
+        ))
+        total["avg_duration"] = round(float(total["avg_duration"] or 0), 1)
+        total["total_tokens"] = total["input_tokens"] + total["output_tokens"]
+        total["avg_tokens"] = round(total["total_tokens"] / total["token_review_count"]) if total["token_review_count"] else 0
+
+        trend = [
+            dict(row)
+            for row in self._all(
+                f"""
+                SELECT date(t.created_at, '{STATS_DAY_OFFSET}') AS day, COUNT(*) AS reviews,
+                       COALESCE(SUM(t.finding_count), 0) AS findings,
+                       COALESCE(SUM(t.token_input + t.token_output), 0) AS tokens
+                FROM review_tasks t WHERE {where} GROUP BY day ORDER BY day
+                """,
+                params,
+            )
+        ]
+
+        severity_rows = self._all(
+            f"""
+            SELECT t.repository_name AS name, f.severity AS severity, COUNT(*) AS count
+            FROM findings f JOIN review_tasks t ON t.id = f.review_task_id
+            WHERE {where} GROUP BY t.repository_name, f.severity
+            """,
+            params,
         )
-        rows = self._all(
-            f"SELECT * FROM review_tasks {has_usage} ORDER BY created_at DESC LIMIT ?",
-            (limit if limit else -1,),
-        )
-        summary = {key: int(total[key]) for key in total.keys()}
-        summary["total_tokens"] = summary["input_tokens"] + summary["output_tokens"]
-        count = summary["review_count"]
-        for key in ("input_tokens", "output_tokens", "total_tokens"):
-            summary[f"avg_{key}"] = round(summary[key] / count, 2) if count else 0.0
-        return {"summary": summary, "items": [self._task(row).model_dump(mode="json") for row in rows]}
+        severity = {"major": 0, "minor": 0, "suggestion": 0}
+        repo_severity: dict[str, dict[str, int]] = {}
+        for row in severity_rows:
+            severity[row["severity"]] += int(row["count"])
+            repo_severity.setdefault(row["name"], {"major": 0, "minor": 0, "suggestion": 0})[row["severity"]] = int(
+                row["count"]
+            )
+
+        replies = self._reply_breakdown(where, params)
+        empty_replies = self._sum_replies([])
+        repositories = []
+        for row in self._all(
+            f"""
+            SELECT t.repository_name AS name, COUNT(*) AS review_count,
+                   COALESCE(SUM(t.finding_count), 0) AS finding_count, MAX(t.created_at) AS latest_at, {token_sum}
+            FROM review_tasks t WHERE {where} GROUP BY t.repository_name
+            ORDER BY finding_count DESC, review_count DESC, name COLLATE NOCASE
+            """,
+            params,
+        ):
+            item = dict(row)
+            item["total_tokens"] = item["input_tokens"] + item["output_tokens"]
+            item["severity"] = repo_severity.get(item["name"], {"major": 0, "minor": 0, "suggestion": 0})
+            item["replies"] = replies.get(item["name"], empty_replies)
+            repositories.append(item)
+
+        model_findings = {
+            row["model"]: int(row["count"])
+            for row in self._all(
+                f"""
+                SELECT f.model AS model, COUNT(*) AS count
+                FROM findings f JOIN review_tasks t ON t.id = f.review_task_id
+                WHERE {where} AND f.model <> '' GROUP BY f.model
+                """,
+                params,
+            )
+        }
+        models = []
+        for row in self._all(
+            f"""
+            SELECT m.model AS name,
+                   COALESCE(SUM(m.call_count), 0) AS call_count,
+                   COALESCE(SUM(CASE WHEN m.success = 1 THEN m.call_count ELSE 0 END), 0) AS success_count,
+                   COUNT(DISTINCT CASE WHEN m.kind = 'review' AND m.success = 1 THEN m.review_task_id END)
+                       AS review_count,
+                   COALESCE(SUM(m.input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(m.cached_input_tokens), 0) AS cached_input_tokens,
+                   COALESCE(SUM(CASE WHEN m.success = 1 AND m.kind = 'review' THEN m.duration END), 0) AS duration,
+                   COALESCE(SUM(CASE WHEN m.success = 1 AND m.kind = 'review' THEN m.call_count END), 0) AS timed_calls
+            FROM model_calls m JOIN review_tasks t ON t.id = m.review_task_id
+            WHERE {where} GROUP BY m.model ORDER BY call_count DESC, name
+            """,
+            params,
+        ):
+            item = dict(row)
+            item["failed_count"] = item["call_count"] - item["success_count"]
+            item["total_tokens"] = item["input_tokens"] + item["output_tokens"]
+            item["avg_duration"] = round(item.pop("duration") / item["timed_calls"], 1) if item["timed_calls"] else 0.0
+            item.pop("timed_calls")
+            item["finding_count"] = model_findings.get(item["name"], 0)
+            models.append(item)
+
+        return {
+            "totals": total,
+            "trend": trend,
+            "severity": severity,
+            "replies": self._sum_replies(replies.values()),
+            "repositories": repositories,
+            "models": models,
+        }
 
     # ------------------------------------------------------------------ 任务状态流转
 
@@ -549,6 +810,29 @@ class Database:
             (max(0, input_tokens), max(0, output_tokens), max(0, cached_tokens), task_id),
         )
 
+    def record_model_call(
+        self,
+        task_id: str,
+        model: str,
+        *,
+        kind: str = "review",
+        success: bool = True,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cached_tokens: int = 0,
+        duration: float = 0.0,
+    ) -> None:
+        """记录一次模型调用（成功或进程级失败），用于按模型统计。"""
+        self._execute(
+            "INSERT INTO model_calls (review_task_id, model, kind, success, input_tokens, output_tokens, "
+            "cached_input_tokens, duration, created_at) "
+            "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM review_tasks WHERE id = ?)",
+            (
+                task_id, model or "", kind, 1 if success else 0, max(0, input_tokens), max(0, output_tokens),
+                max(0, cached_tokens), max(0.0, duration), _now(), task_id,
+            ),
+        )
+
     def complete_review(
         self,
         task_id: str,
@@ -556,6 +840,7 @@ class Database:
         *,
         stats: dict[str, Any],
         comment_status: str = "pending",
+        models: list[str] | None = None,
     ) -> list[int]:
         """原子地写入意见并把任务置为 success，返回新意见 ID。
 
@@ -569,10 +854,10 @@ class Database:
                 connection.execute(
                     "DELETE FROM findings WHERE review_task_id = ? AND status = 'pending'", (task_id,)
                 )
-                for finding in findings:
+                for index, finding in enumerate(findings):
                     cursor = connection.execute(
                         "INSERT INTO findings (review_task_id, new_path, old_path, new_line, severity, title, body, "
-                        "status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "status, created_at, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             task_id,
                             finding.new_path,
@@ -583,6 +868,7 @@ class Database:
                             finding.body.strip(),
                             comment_status,
                             _now(),
+                            (models[index] if models and index < len(models) else "") or "",
                         ),
                     )
                     ids.append(int(cursor.lastrowid))
@@ -764,19 +1050,7 @@ class Database:
         )
         return cursor.rowcount == 1
 
-    def review_reply_stats(self) -> dict[str, int]:
-        """意见回复分布。没有任何回复的意见默认计为“已解决”。"""
-        finding_count = int(self._one("SELECT COUNT(*) FROM findings")[0])
-        rows = self._all(
-            "SELECT category, COUNT(*) FROM review_reply_events WHERE finding_id IS NOT NULL GROUP BY category"
-        )
-        counts = {category: 0 for category in REPLY_CATEGORIES} | {row[0]: int(row[1]) for row in rows}
-        replied = int(
-            self._one("SELECT COUNT(DISTINCT finding_id) FROM review_reply_events WHERE finding_id IS NOT NULL")[0]
-        )
-        counts["resolved"] += max(0, finding_count - replied)
-        return {
-            **counts,
-            "finding_count": finding_count,
-            "classification_total": sum(counts[category] for category in REPLY_CATEGORIES),
-        }
+    def review_reply_stats(self, *, exclude: list[str] | None = None) -> dict[str, int]:
+        """意见回复分布（不含隐藏的代码仓）。没有任何回复的意见默认计为“已解决”。"""
+        where, params = self._stats_scope(None, None, exclude)
+        return self._sum_replies(self._reply_breakdown(where, params).values())

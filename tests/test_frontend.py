@@ -16,7 +16,7 @@ def test_every_script_element_id_exists_in_html():
     script_ids = {item for item in script_ids if not item.startswith("$")}
     missing = sorted(item for item in script_ids if item not in html_ids)
     assert not missing, f"app.js 引用了 index.html 中不存在的元素：{missing}"
-    for page in ("reviews", "stats", "models", "scope"):
+    for page in ("reviews", "stats", "repos", "models", "scope"):
         assert f'id="page-{page}"' in HTML and f'href="#{page}"' in HTML
 
 
@@ -28,7 +28,8 @@ def test_script_calls_backend_apis():
         "/events?reasoning_only=true",
         "/api/review-events/stream?task_id=",
         "/api/stats/review-replies",
-        "/api/stats/tokens?limit=200",
+        "/api/stats/overview?",
+        "/api/settings/repositories",
         "/api/settings/models",
         "/api/settings/llm/models",
         "/api/settings/review-scope",
@@ -58,6 +59,7 @@ def test_script_behaviour_markers():
     # 未登录时配置页只读
     assert '$("model-readonly").hidden = editable' in JS
     assert '$("scope-readonly").hidden = editable' in JS
+    assert '$("repos-readonly").hidden = editable' in JS
 
 
 def test_styles_support_dark_mode_and_mobile():
@@ -81,3 +83,14 @@ def test_shard_numbering_matches_backend():
 
 def test_reply_ratio_one_decimal():
     assert ".toFixed(1)" in JS
+
+
+def test_stats_page_charts():
+    # 统计页：时间范围 + 维度（全部 / 分组 / 代码仓），图表为纯 SVG，不再展示 Token 流水
+    assert "/api/stats/tokens" not in JS and "token-rows" not in HTML
+    for marker in ("function donutSvg", "function trendSvg", "function cellBar", 'data-range="7d"', "g:__ungrouped__"):
+        assert marker in JS or marker in HTML, marker
+    # 图表分类色在浅色与深色模式下各定义一套
+    assert CSS.count("--c1:") == 2
+    # 检视意见回复分布改为环形图，不再是整行横条
+    assert 'id="reply-donut"' in HTML and "reply-bar" not in HTML

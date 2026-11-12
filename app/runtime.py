@@ -17,6 +17,7 @@ from .llm.registry import ModelRegistry
 from .models import ReviewTask
 from .review.codegraph import CodeGraphIndexer
 from .review.git import RepositoryManager
+from .review.repos import RepositoryCatalog
 from .review.scope import ReviewScopeRegistry
 from .review.service import ReviewService
 from .storage import Database
@@ -34,6 +35,7 @@ class ReviewRuntime:
         self.database = Database(settings.database_path)
         self.registry = ModelRegistry(self.database, settings)
         self.scope = ReviewScopeRegistry(self.database)
+        self.catalog = RepositoryCatalog(self.database)
         self.codehub = CodeHubClient(settings)
         self.publisher = Publisher(self.database, self.codehub, settings)
         self.codex = CodexClient(settings, self.registry)

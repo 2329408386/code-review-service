@@ -144,6 +144,18 @@ class ReviewScopeInput(BaseModel):
     rules: list[ReviewScopeRuleInput] = Field(default_factory=list, max_length=200)
 
 
+class RepositoryGroupInput(BaseModel):
+    name: str = Field(max_length=200)
+    repositories: list[str] = Field(default_factory=list, max_length=1000)
+
+
+class RepositoryCatalogInput(BaseModel):
+    """代码仓管理：隐藏的代码仓与分组。"""
+
+    hidden: list[str] = Field(default_factory=list, max_length=1000)
+    groups: list[RepositoryGroupInput] = Field(default_factory=list, max_length=200)
+
+
 # ============ 模型输出 ============
 
 
@@ -234,6 +246,7 @@ class FindingRecord(BaseModel):
     comment_error: str | None = None
     comment_retry_count: int = 0
     discussion_id: str | None = None
+    model: str = ""  # 产出该意见的模型（历史多模型任务为空）
 
     @property
     def display_path(self) -> str:

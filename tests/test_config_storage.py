@@ -91,9 +91,75 @@ def test_list_filters_summary_and_tokens(database: Database):
     assert summary["review_count"] == 2 and summary["finding_count"] == 1
     assert summary["repository_stats"][0]["name"] == "alpha"
     assert database.authors() == ["Alice", "Bob"]
-    tokens = database.token_usage_summary(limit=10)
-    assert tokens["summary"]["review_count"] == 1
-    assert tokens["summary"]["total_tokens"] == 110
+    # 隐藏的代码仓不出现在列表、汇总与代码仓下拉中
+    assert [t.repository_name for t in database.list_tasks(exclude=["alpha"])] == ["beta"]
+    assert database.task_summary(exclude=["alpha"])["review_count"] == 1
+    assert [row["name"] for row in database.repositories(exclude=["beta"])] == ["alpha"]
+
+
+def test_stats_overview_scopes_and_dimensions(database: Database):
+    a = create_task(database, repository_name="alpha", source_sha="1" * 40)
+    b = create_task(database, repository_name="beta", source_sha="2" * 40)
+    create_task(database, repository_name="beta", source_sha="3" * 40, status="ignored")
+    ids = database.complete_review(
+        a.id, [candidate(), candidate(line=3, title="b", severity="minor")],
+        stats={"token_input": 100, "token_output": 10, "token_cached_input": 40}, models=["m1", "m2"],
+    )
+    database.complete_review(b.id, [candidate()], stats={"token_input": 7, "token_output": 3}, models=["m1"])
+    database.record_model_call(a.id, "m1", input_tokens=60, output_tokens=6, duration=4.0)
+    database.record_model_call(a.id, "m2", input_tokens=40, output_tokens=4, duration=2.0)
+    database.record_model_call(a.id, "m2", success=False)
+    database.record_model_call(b.id, "m1", input_tokens=7, output_tokens=3, duration=1.0)
+    database.record_model_call("missing", "m1")  # 任务不存在时忽略
+    database.mark_comment_sent(ids[0], "disc-1")
+    database.record_review_reply(
+        project_id=7, mr_iid=3, discussion_id="disc-1", author_id=5, note_id=1, note="无风险", category="no_risk"
+    )
+
+    data = database.stats_overview()
+    totals = data["totals"]
+    assert totals["review_count"] == 3 and totals["success_count"] == 2 and totals["ignored_count"] == 1
+    assert totals["finding_count"] == 3 and totals["repository_count"] == 2
+    assert totals["total_tokens"] == 120 and totals["avg_tokens"] == 60  # 只按有用量的检视求平均
+    assert data["severity"] == {"major": 2, "minor": 1, "suggestion": 0}
+    assert data["replies"]["no_risk"] == 1 and data["replies"]["resolved"] == 2
+    assert sum(day["reviews"] for day in data["trend"]) == 3
+    repos = {row["name"]: row for row in data["repositories"]}
+    assert repos["alpha"]["total_tokens"] == 110 and repos["alpha"]["severity"]["minor"] == 1
+    assert repos["alpha"]["replies"]["no_risk"] == 1 and repos["beta"]["replies"]["resolved"] == 1
+    models = {row["name"]: row for row in data["models"]}
+    assert models["m1"]["call_count"] == 2 and models["m1"]["finding_count"] == 2 and models["m1"]["review_count"] == 2
+    assert models["m2"]["call_count"] == 2 and models["m2"]["failed_count"] == 1 and models["m2"]["avg_duration"] == 2.0
+
+    only_beta = database.stats_overview(include=["beta"])
+    assert only_beta["totals"]["review_count"] == 2 and [m["name"] for m in only_beta["models"]] == ["m1"]
+    assert database.stats_overview(exclude=["alpha"])["replies"]["no_risk"] == 0
+    assert database.stats_overview(include=[])["totals"]["review_count"] == 0
+    assert database.stats_overview(since="2999-01-01")["totals"]["review_count"] == 0
+    assert database.review_reply_stats(exclude=["alpha"])["finding_count"] == 1
+    assert [f.model for f in database.list_findings(a.id)] == ["m1", "m2"]
+
+
+def test_model_calls_backfill(tmp_path):
+    import json
+    import sqlite3
+
+    database = Database(tmp_path / "r.db")
+    single = create_task(database, source_sha="1" * 40)
+    multi = create_task(database, source_sha="2" * 40)
+    database.complete_review(single.id, [candidate()], stats={"token_input": 9, "token_output": 3, "review_pass_count": 2})
+    database.complete_review(multi.id, [], stats={"token_input": 9, "token_output": 3, "review_pass_count": 2})
+    with sqlite3.connect(database.path) as connection:  # 模拟升级前的库：没有模型调用记录
+        connection.execute("UPDATE review_tasks SET models_used = ? WHERE id = ?", (json.dumps(["a"]), single.id))
+        connection.execute("UPDATE review_tasks SET models_used = ? WHERE id = ?", (json.dumps(["a", "b"]), multi.id))
+        connection.execute("DELETE FROM runtime_settings")
+
+    upgraded = Database(database.path)
+    models = {row["name"]: row for row in upgraded.stats_overview()["models"]}
+    assert models["a"]["input_tokens"] == 9 + 5 and models["b"]["input_tokens"] == 4  # 多模型任务均分
+    assert models["a"]["call_count"] == 3 and models["a"]["finding_count"] == 1
+    Database(database.path)  # 只回填一次
+    assert upgraded.stats_overview()["models"][0]["call_count"] == 3
 
 
 def test_clone_and_delete(database: Database):

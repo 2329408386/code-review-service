@@ -63,6 +63,8 @@ def test_review_success_flow(env, database, settings):
     assert stored.finding_count == 1 and stored.rejected_finding_count == 1
     assert stored.review_mode == "full" and stored.reviewed_added_line_count == 2
     assert stored.token_input == 100 and stored.review_summary == "有问题"
+    [call] = database.stats_overview()["models"]
+    assert call["input_tokens"] == 100 and call["call_count"] == 1
     [finding] = database.list_findings(task.id)
     assert (finding.new_path, finding.new_line) == ("app.py", 3)
     assert publisher.comments == [finding.id]
@@ -189,6 +191,11 @@ def test_failover_to_other_route_and_switch_back(env, database, settings, monkey
     assert stored.models_used == ["backup"]
     warnings = [e.message for e in database.list_events([task.id]) if e.status == "warning"]
     assert any("primary" in m and "backup" in m for m in warnings)
+    # 每次调用都记录到 model_calls：primary 失败、backup 成功；意见归属到 backup
+    models = {row["name"]: row for row in database.stats_overview()["models"]}
+    assert models["primary"]["failed_count"] == 1 and models["primary"]["success_count"] == 0
+    assert models["backup"]["success_count"] == 1 and models["backup"]["finding_count"] == 1
+    assert [f.model for f in database.list_findings(task.id)] == ["backup"]
     # primary 已判定异常：冷却期内新任务直接使用 backup
     primary = service.registry.route_for("demo")
     assert service.registry.candidates("demo")[0].name == "backup"
